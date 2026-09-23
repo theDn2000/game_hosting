@@ -71,3 +71,23 @@ A dia de 22/09/2026, la idea es llegar a tener:
                    │
                    ▼
                 Docker
+
+
+
+A dia 23/09/2026, Ahora la cadena queda:
+
+    ServerService
+        │
+        ▼
+    DockerClient
+        │
+        ▼
+    Docker SDK
+        │
+        ▼
+    Docker Engine
+        │
+        ▼
+    minecraft-dev
+
+Esto es justo la arquitectura que acabamos de decidir.
