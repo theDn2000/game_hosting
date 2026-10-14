@@ -91,3 +91,10 @@ A dia 23/09/2026, Ahora la cadena queda:
     minecraft-dev
 
 Esto es justo la arquitectura que acabamos de decidir.
+
+## Registro de cambios
+
+Registro breve de los commits relevantes, del más reciente al más antiguo. La fuente de verdad del estado del proyecto está en `docs/`.
+
+- 2026-10-14 · Contexto del proyecto (`CLAUDE.md`, `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`) con el estado verificado.
+- 2026-10-14 · Higiene del repositorio: `.gitignore` ampliado, `.pyc` fuera de Git, `requirements.txt` en UTF-8 y `pywin32` solo en Windows. Ciclo de Compose verificado (el mundo persiste).
