@@ -52,8 +52,8 @@ Approved plan (2026-10-15), four steps, one commit each: (1) errors + `DockerCli
 - [x] Handle Docker Engine unavailable in `DockerClient` (translated to `RuntimeUnavailableError`; unit-tested only, not yet exercised with Docker Desktop actually stopped).
 - [x] Define application-level errors for missing containers and Docker failures (`app/errors.py`).
 - [x] Keep Docker SDK details in the infrastructure layer.
-- [ ] Step 2 — `ServerService` with typed status (`ServerStatus`), idempotent start/stop, restart, logs, default 30 s timeout, and its tests.
-- [ ] Add automated tests for service behavior and error cases (infrastructure tests done; service tests pending).
+- [x] Step 2 — `ServerService` with typed status (`ServerStatus`), idempotent start/stop, restart, logs, default 30 s timeout, and its tests (29 unit tests, 49 in total; mutation-checked; smoke-checked against the real `minecraft-dev` container on 2026-10-15).
+- [x] Add automated tests for service behavior and error cases.
 - [ ] Provide a thin CLI that calls the same service methods.
 - [ ] Run tests and perform a manual integration check against the local container.
 
@@ -157,8 +157,8 @@ Goal: progressively add the controls required for a real hosting business.
 
 ## Immediate Next Step
 
-1. Phase 1, step 2: `ServerService` with typed status and lifecycle operations, plus tests.
-2. Then step 3 (CLI) and step 4 (integration check against the local Compose service; Docker Desktop must be running).
+1. Phase 1, step 3: thin CLI (`status | start | stop | restart | logs`) on top of `ServerService`, with readable error messages and distinct exit codes.
+2. Then step 4: integration check against the local Compose service (Docker Desktop must be running), including a real "Docker stopped" check, and final doc updates.
 3. Update `docs/ARCHITECTURE.md` and this roadmap based on the resulting code and test evidence.
 
 Do not start Phase 2 until Phase 1's definition of done is met or an explicit scope decision is made.
