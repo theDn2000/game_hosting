@@ -1,7 +1,10 @@
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from app.errors import ServerNotFoundError
-from app.infrastructure.docker_client import DockerClient
+
+if TYPE_CHECKING:
+    from app.infrastructure.docker_client import DockerClient
 
 DEFAULT_STOP_TIMEOUT = 30
 DEFAULT_LOG_TAIL = 100
@@ -30,10 +33,10 @@ class ServerService:
     the application errors defined in `app.errors`.
     """
 
-    def __init__(self, docker_client: DockerClient | None = None):
-        self.docker_client = (
-            docker_client if docker_client is not None else DockerClient()
-        )
+    def __init__(self, docker_client: DockerClient):
+        # Injected by the entry point (CLI, API) so this layer never imports a
+        # concrete infrastructure adapter at runtime.
+        self.docker_client = docker_client
 
     def get_server_status(self, server_name):
         """Return the server status; a server that does not exist is a valid

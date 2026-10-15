@@ -54,7 +54,7 @@ Approved plan (2026-10-15), four steps, one commit each: (1) errors + `DockerCli
 - [x] Keep Docker SDK details in the infrastructure layer.
 - [x] Step 2 — `ServerService` with typed status (`ServerStatus`), idempotent start/stop, restart, logs, default 30 s timeout, and its tests (29 unit tests, 49 in total; mutation-checked; smoke-checked against the real `minecraft-dev` container on 2026-10-15).
 - [x] Add automated tests for service behavior and error cases.
-- [ ] Provide a thin CLI that calls the same service methods.
+- [x] Step 3 — Thin CLI that calls the same service methods (`status | start | stop | restart | logs`, exit codes 0-5, `ServerService` now receives its `DockerClient` from the entry point). 24 CLI unit tests (73 in total, mutation-checked); every command was run against the real `minecraft-dev` container on 2026-10-15, including a missing server (exit 3) and invalid usage (exit 2).
 - [ ] Run tests and perform a manual integration check against the local container.
 
 **Definition of done**
@@ -157,9 +157,8 @@ Goal: progressively add the controls required for a real hosting business.
 
 ## Immediate Next Step
 
-1. Phase 1, step 3: thin CLI (`status | start | stop | restart | logs`) on top of `ServerService`, with readable error messages and distinct exit codes.
-2. Then step 4: integration check against the local Compose service (Docker Desktop must be running), including a real "Docker stopped" check, and final doc updates.
-3. Update `docs/ARCHITECTURE.md` and this roadmap based on the resulting code and test evidence.
+1. Phase 1, step 4: integration check against the local Compose service (Docker Desktop must be running): automated `integration`-marked tests, plus a real "Docker stopped" check of exit code 4, which needs the user to stop Docker Desktop.
+2. Final documentation update and review of the Phase 1 definition of done; then decide whether to start Phase 2.
 
 Do not start Phase 2 until Phase 1's definition of done is met or an explicit scope decision is made.
 

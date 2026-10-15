@@ -96,6 +96,7 @@ Esto es justo la arquitectura que acabamos de decidir.
 
 Registro breve de los commits relevantes, del más reciente al más antiguo. La fuente de verdad del estado del proyecto está en `docs/`.
 
+- 2026-10-15 · Fase 1, paso 3: CLI (`python cli.py status|start|stop|restart|logs`) con códigos de salida; `ServerService` recibe su `DockerClient` desde el punto de entrada; 24 pruebas nuevas (73 en total).
 - 2026-10-15 · Fase 1, paso 2: `ServerService` con `ServerStatus`, start/stop idempotentes, restart y logs; 29 pruebas nuevas (49 en total).
 - 2026-10-15 · Fase 1, paso 1: `DockerClient` con start/stop/restart/logs, conexión perezosa y errores de aplicación (`app/errors.py`); 20 pruebas unitarias con pytest.
 - 2026-10-14 · Contexto del proyecto (`CLAUDE.md`, `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`) con el estado verificado.
