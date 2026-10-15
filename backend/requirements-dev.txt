@@ -1,2 +1,5 @@
 -r requirements.txt
+httpcore2==2.13.1
+httpx2==2.13.1
 pytest==9.1.1
+truststore==0.10.5

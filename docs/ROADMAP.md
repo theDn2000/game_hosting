@@ -8,6 +8,8 @@
 
 `ServerService` and `DockerClient` support status, start, stop, restart and logs with controlled errors; a CLI exposes them; 76 default tests and 5 integration tests pass. All of it was verified against a live Docker Engine and the real `minecraft-dev` container. Only Windows + Docker Desktop has been tested; nothing has run on Linux.
 
+Phase 2 (HTTP API) is in progress: the FastAPI skeleton and `/health` exist; the server endpoints do not yet.
+
 ## Phases and Milestones
 
 ### Phase 0 — Development environment and Minecraft runtime
@@ -66,19 +68,29 @@ Approved plan (2026-10-15), four steps, one commit each: (1) errors + `DockerCli
 
 ### Phase 2 — HTTP API
 
+**Status: In progress (started 2026-10-15).**
+
 Goal: expose the existing application service through FastAPI without rewriting its behavior.
 
-- [ ] Add a minimal FastAPI application and health endpoint.
-- [ ] Expose narrowly scoped server lifecycle/status/log endpoints.
-- [ ] Validate request parameters and return consistent HTTP errors.
-- [ ] Keep routes thin; call `ServerService`.
-- [ ] Add API tests and document local startup.
+Approved plan, four steps, one commit each: (1) dependencies, `create_app` skeleton and `/health`; (2) status/start/stop/restart/logs endpoints, error mapping, validation and logging; (3) security measures; (4) HTTP integration test, Linux checkpoint, docs. Decisions (2026-10-15):
+- Only containers labelled `game-hosting.managed=true` are manageable; any other container is treated as not found. This also applies to the CLI, so `docker-compose.yml` gets the label and `minecraft-dev` is recreated (`./data` untouched).
+- A temporary shared token, read from an environment variable and sent in a header, is required on API calls; the API refuses to start without it. It exists to stop hostile web pages from reaching a localhost API (a cross-origin "simple" POST needs no preflight) and is not the user authentication of Phase 7/4. It is replaced by real authentication later.
+- The API binds to `127.0.0.1` by default. No API versioning until a real client exists.
+- No create/delete endpoints in this phase: only operate existing, labelled containers.
+- Linux verification is a checkpoint at the end of Phase 2, before Phase 3 (the user asked for an environment setup guide at that point).
+- Error mapping: not found 404, runtime unavailable 503, operation failed 500; raw Docker messages are logged server-side and never returned to clients. Input limits: server name restricted to valid Docker names, `tail` 1-1000, `timeout` 1-300.
+
+- [x] Step 1 — Dependencies (`fastapi`, `uvicorn`; dev: `httpx2` instead of the deprecated `httpx`, as Starlette recommends), `create_app(service)` skeleton and `GET /health` (liveness only, never calls Docker). 2 tests; smoke-checked with a real uvicorn on `127.0.0.1`.
+- [ ] Step 2 — Expose narrowly scoped server lifecycle/status/log endpoints; validate request parameters and return consistent HTTP errors; keep routes thin.
+- [ ] Step 3 — Managed-container label (`DockerClient` + Compose + CLI) and the temporary token.
+- [ ] Step 4 — HTTP integration test against a throwaway container, document local startup, Linux checkpoint.
 
 **Definition of done**
 - API endpoints reuse the controller's application logic.
 - Error conditions map to appropriate HTTP status codes.
 - No public Docker socket/API is exposed.
 - Tests cover normal and error responses.
+- Unmanaged containers cannot be controlled through the API or the CLI.
 
 ### Phase 3 — Domain model and persistence
 
@@ -176,6 +188,7 @@ Phase 1's definition of done is met, so Phase 2 may start once the user approves
 
 Resolve these when the relevant phase approaches; do not block the current controller work on them.
 
+- Server ownership and lifecycle (Phases 3, 5, 7): who may operate a container, and who decides when it is created and destroyed? Working position (not decided): ownership lives in the database, not in container labels, and the API checks it before calling `ServerService`; a server is provisioned automatically when a subscription becomes active; the customer can start, stop and restart it; deletion is a separate guarded action with a grace period, never immediate.
 - Which Linux distribution and hosting provider will be used for the first production node?
 - What initial Minecraft plans and resource limits are commercially viable?
 - How will ports, DNS, and customer connection endpoints be assigned?
