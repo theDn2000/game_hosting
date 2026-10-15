@@ -4,9 +4,9 @@
 
 ## Current Phase
 
-**Phase 1 — Local server controller**
+**Phase 1 — Local server controller: complete (verified 2026-10-15), pending the user's decision to start Phase 2.**
 
-The local Minecraft container is defined under Docker Compose, and Python-to-Docker connectivity has been demonstrated (reported by user). The Python controller is being built: only container lookup and status exist so far (verified by inspection on 2026-10-14). There are no automated tests and `backend/cli.py` is empty. Docker Desktop was not running during the last inspection, so nothing was verified against a live container.
+`ServerService` and `DockerClient` support status, start, stop, restart and logs with controlled errors; a CLI exposes them; 76 default tests and 5 integration tests pass. All of it was verified against a live Docker Engine and the real `minecraft-dev` container. Only Windows + Docker Desktop has been tested; nothing has run on Linux.
 
 ## Phases and Milestones
 
@@ -40,7 +40,7 @@ Repository hygiene (found and applied on 2026-10-14, committed):
 
 ### Phase 1 — Python server controller
 
-**Status: In progress.**
+**Status: Complete (2026-10-15). All definition-of-done items below are met.**
 
 Goal: implement a small, testable application layer that can control the existing container.
 
@@ -55,7 +55,7 @@ Approved plan (2026-10-15), four steps, one commit each: (1) errors + `DockerCli
 - [x] Step 2 — `ServerService` with typed status (`ServerStatus`), idempotent start/stop, restart, logs, default 30 s timeout, and its tests (29 unit tests, 49 in total; mutation-checked; smoke-checked against the real `minecraft-dev` container on 2026-10-15).
 - [x] Add automated tests for service behavior and error cases.
 - [x] Step 3 — Thin CLI that calls the same service methods (`status | start | stop | restart | logs`, exit codes 0-5, `ServerService` now receives its `DockerClient` from the entry point). 24 CLI unit tests (73 in total, mutation-checked); every command was run against the real `minecraft-dev` container on 2026-10-15, including a missing server (exit 3) and invalid usage (exit 2).
-- [ ] Run tests and perform a manual integration check against the local container.
+- [x] Step 4 — Run tests and perform integration checks (2026-10-15): 76 default tests and 5 `integration` tests pass (throwaway `alpine` container driven through `ServerService` and the CLI; `minecraft-dev` untouched); the full CLI was run by hand against `minecraft-dev`; with Docker Desktop fully quit every command exits with code 4 and a clear message. Also verified: `cli.py stop` on `minecraft-dev` stops it gracefully in about 1 s (the server logs "Stopping server", "Saving players" and "Saving worlds", and the container exits with code 0). Not verified: anything on Linux.
 
 **Definition of done**
 - Supported operations work against the local container.
@@ -157,10 +157,10 @@ Goal: progressively add the controls required for a real hosting business.
 
 ## Immediate Next Step
 
-1. Phase 1, step 4: integration check against the local Compose service (Docker Desktop must be running): automated `integration`-marked tests, plus a real "Docker stopped" check of exit code 4, which needs the user to stop Docker Desktop.
-2. Final documentation update and review of the Phase 1 definition of done; then decide whether to start Phase 2.
+1. The user decides whether to start Phase 2 (FastAPI). Before implementing it, propose a plan: it adds a dependency (FastAPI + an ASGI server), a new entry point, and the first network boundary (so authentication and exposure need an explicit decision).
+2. Pending decisions carried over from Phase 0: dependency strategy / Linux install test, and pinning the Minecraft image before production.
 
-Do not start Phase 2 until Phase 1's definition of done is met or an explicit scope decision is made.
+Phase 1's definition of done is met, so Phase 2 may start once the user approves its plan.
 
 ## Out of Scope for Now
 

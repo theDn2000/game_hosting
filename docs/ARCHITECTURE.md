@@ -64,8 +64,8 @@ The intended responsibilities are:
 
 **Known gaps and risks:**
 
-- Integration tests use an `alpine` throwaway container, not the Minecraft image, so they do not prove anything about Minecraft itself (for example that the server saves its world when stopped within the 30 s timeout). That has not been verified.
-- Behaviour with Docker Desktop actually stopped (as opposed to an unreachable `DOCKER_HOST`) has not been verified yet.
+- Integration tests use an `alpine` throwaway container, not the Minecraft image, so they say nothing about Minecraft itself. That was checked by hand on 2026-10-15 instead: `cli.py stop` on `minecraft-dev` shut it down in about 1 s, the log shows "Stopping server" / "Saving players" / "Saving worlds", and the container exited with code 0.
+- Verified on 2026-10-15 with Docker Desktop fully quit: all five CLI commands exit with code 4 and print `error: Cannot reach Docker ...` with no traceback (`app/main.py` still shows a traceback, as it has no error handling). The Docker error text is embedded as-is, so on a localised Windows it appears in the OS language.
 - The CLI hard-codes the default server name `minecraft-dev` (acceptable while Minecraft is the only game; revisit in Phase 3).
 - `ServerService.restart_server` does not check the server's existence first; a missing server surfaces through `DockerClient` as `ServerNotFoundError`, which is the same outcome.
 - `backend/requirements.txt` is a pinned `pip freeze` of seven packages that matches the installed environment. It is now UTF-8 and `pywin32==312` carries the marker `sys_platform == "win32"` (it is a Windows-only transitive dependency of `docker`, not accidental tooling), so Linux is expected to skip it. A real Linux install has not been tested, and the file still pins transitive dependencies; the long-term strategy is an open decision below.
