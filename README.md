@@ -96,5 +96,6 @@ Esto es justo la arquitectura que acabamos de decidir.
 
 Registro breve de los commits relevantes, del más reciente al más antiguo. La fuente de verdad del estado del proyecto está en `docs/`.
 
+- 2026-10-15 · Fase 1, paso 1: `DockerClient` con start/stop/restart/logs, conexión perezosa y errores de aplicación (`app/errors.py`); 20 pruebas unitarias con pytest.
 - 2026-10-14 · Contexto del proyecto (`CLAUDE.md`, `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`) con el estado verificado.
 - 2026-10-14 · Higiene del repositorio: `.gitignore` ampliado, `.pyc` fuera de Git, `requirements.txt` en UTF-8 y `pywin32` solo en Windows. Ciclo de Compose verificado (el mundo persiste).

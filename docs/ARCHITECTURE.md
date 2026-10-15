@@ -52,18 +52,19 @@ The intended responsibilities are:
 - `cli.py`: development/test interface. It should call application services rather than duplicate business logic.
 - `requirements.txt`: reproducible list of Python dependencies; verify it reflects the environment and does not include accidental tooling.
 
-**Implemented as of 2026-10-14 (verified by inspection):**
+**Implemented as of 2026-10-15 (verified by tests and a real-Docker smoke check):**
 
-- `DockerClient`: `get_container(name)` returns the container or `None` if Docker reports `NotFound`; `get_status(name)` returns `container.status` or the string `"not_found"`. The constructor calls `docker.from_env()`.
-- `ServerService`: `get_server_status(server_name)` delegates to `DockerClient.get_status`. Both layers return raw strings, not a typed application-level result.
-- `app/main.py`: a throwaway script that runs at import time (no `if __name__ == "__main__"` guard) and prints the status of `minecraft-dev`. Not yet a real entry point.
+- `app/errors.py`: application errors `ServerNotFoundError`, `RuntimeUnavailableError` and `ServerOperationError` (base `GameHostingError`). No Docker types.
+- `DockerClient`: `get_status`, `start_container`, `stop_container(timeout)`, `restart_container(timeout)` and `get_logs(tail)`. The Docker connection is created lazily on first use; a fake SDK client can be injected for tests. All Docker SDK and `requests` exceptions are translated into the application errors above and never leave this class. `get_status` returns Docker's raw status string and raises `ServerNotFoundError` for a missing container.
+- `ServerService`: still only `get_server_status`, with a temporary shim that maps `ServerNotFoundError` back to the string `"not_found"` so `app/main.py` keeps working. Typed status and lifecycle operations are the next step (Phase 1, step 2).
+- `app/main.py`: a throwaway script that runs at import time (no `if __name__ == "__main__"` guard) and prints the status of `minecraft-dev`. Kept on purpose as a simple entry point.
 - `cli.py`: empty (0 bytes).
-- Tests: none exist.
-- Start, stop, restart and logs operations do not exist yet.
+- Tests: 20 pytest unit tests for `DockerClient` in `backend/tests/infrastructure/`, using a fake SDK client (no Docker needed). `backend/pytest.ini` deselects the `integration` marker by default; no integration tests exist yet. Dev dependencies live in `backend/requirements-dev.txt`.
+- Docker-unavailable handling is covered only by unit tests; it has not been exercised against a real stopped Docker Desktop.
 
 **Known gaps and risks:**
 
-- If Docker is not running, `DockerClient()` raises an uncaught `docker.errors.DockerException` (reproduced on 2026-10-14). There is no application-level error handling yet.
+- `ServerService` has no lifecycle operations and no typed status yet; there is no CLI.
 - `backend/requirements.txt` is a pinned `pip freeze` of seven packages that matches the installed environment. It is now UTF-8 and `pywin32==312` carries the marker `sys_platform == "win32"` (it is a Windows-only transitive dependency of `docker`, not accidental tooling), so Linux is expected to skip it. A real Linux install has not been tested, and the file still pins transitive dependencies; the long-term strategy is an open decision below.
 - The root `.gitignore` lists `data/`, `.venv/`, `__pycache__/` and `*.pyc`, and the previously tracked `.pyc` files were removed from the index.
 - `README.md` (Spanish) describes `DockerClient` and `ServerService` with start/stop/restart/logs methods and a CLI; those are planned, not implemented.
