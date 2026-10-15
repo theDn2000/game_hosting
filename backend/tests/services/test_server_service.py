@@ -50,8 +50,8 @@ class FakeDockerClient:
 
 
 def make_service(**kwargs):
-    docker = FakeDockerClient(**kwargs)
-    return ServerService(docker=docker), docker
+    fake = FakeDockerClient(**kwargs)
+    return ServerService(docker_client=fake), fake
 
 
 @pytest.mark.parametrize(
