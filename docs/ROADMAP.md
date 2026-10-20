@@ -2,6 +2,28 @@
 
 > Keep this roadmap short, ordered, and evidence-based. A milestone is complete only when its acceptance criteria have been verified. Do not infer completion from code merely existing.
 
+## Big Picture
+
+The product is a stack of layers; each phase adds one. Update this section at the end of every task (one line per piece is enough).
+
+```
+ Customer's browser
+        |
+ [ Web panel ]        Phase 4   not started    what customers click
+        |
+ [ HTTP API ]         Phase 2   IN PROGRESS    the front door: lets programs and the panel give orders
+        |
+ [ ServerService ]    Phase 1   done           the rules: "start / stop / restart / status / logs"
+        |
+ [ DockerClient ]     Phase 1   done           the translator that talks to Docker
+        |
+ Docker Engine  ->  game containers (today: one Minecraft server, `minecraft-dev`)
+```
+
+Still to come around that stack: database with users, plans and servers (Phase 3); creating servers automatically (Phase 5); many servers, backups and monitoring (Phase 6); accounts, payments and subscriptions (Phase 7).
+
+**Where we are:** the engine room works (a developer can control the Minecraft server from the terminal). We are building the HTTP API, so that something other than a terminal can control it. The piece being built right now is the front door itself; its first brick (`/health`, "is the API alive?") exists, and the endpoints that actually give orders come next.
+
 ## Current Phase
 
 **Phase 1 — Local server controller: complete (verified 2026-10-15), pending the user's decision to start Phase 2.**

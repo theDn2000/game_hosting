@@ -65,6 +65,7 @@ After each completed task:
 ## Task Completion Report
 
 At the end of each task, report:
+0. A brief big-picture note in plain language: which piece of the overall product this task built and where the project stands (keep the "Big Picture" section of `docs/ROADMAP.md` in sync).
 1. What changed and why.
 2. Files created, modified, or deleted.
 3. Tests/checks executed and their actual results.
