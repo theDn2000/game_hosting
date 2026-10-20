@@ -96,6 +96,7 @@ Esto es justo la arquitectura que acabamos de decidir.
 
 Registro breve de los commits relevantes, del más reciente al más antiguo. La fuente de verdad del estado del proyecto está en `docs/`.
 
+- 2026-10-20 · Fase 2, paso 2: endpoints HTTP de estado, start, stop, restart y logs con errores HTTP (404/503/500), validación de entradas y logging; comprobado con uvicorn real contra `minecraft-dev`. 109 pruebas normales.
 - 2026-10-15 · Fase 2, paso 1: FastAPI + uvicorn, esqueleto `create_app` y `GET /health`; decisiones de seguridad de la fase (etiqueta de contenedores gestionados, token temporal, solo `127.0.0.1`) registradas en `docs/`. 78 pruebas normales.
 - 2026-10-15 · Fase 1, paso 4 y cierre de la Fase 1: pruebas de integración (`pytest -m integration`, contenedor desechable), pruebas de Docker no disponible con el SDK real y comprobación manual con Docker Desktop apagado (código de salida 4); parada limpia de Minecraft verificada. 76 pruebas normales + 5 de integración.
 - 2026-10-15 · Fase 1, paso 3: CLI (`python cli.py status|start|stop|restart|logs`) con códigos de salida; `ServerService` recibe su `DockerClient` desde el punto de entrada; 24 pruebas nuevas (73 en total).

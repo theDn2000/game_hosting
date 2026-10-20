@@ -22,7 +22,7 @@ The product is a stack of layers; each phase adds one. Update this section at th
 
 Still to come around that stack: database with users, plans and servers (Phase 3); creating servers automatically (Phase 5); many servers, backups and monitoring (Phase 6); accounts, payments and subscriptions (Phase 7).
 
-**Where we are:** the engine room works (a developer can control the Minecraft server from the terminal). We are building the HTTP API, so that something other than a terminal can control it. The piece being built right now is the front door itself; its first brick (`/health`, "is the API alive?") exists, and the endpoints that actually give orders come next.
+**Where we are:** the engine room works (a developer can control the Minecraft server from the terminal). We are building the HTTP API, so that something other than a terminal can control it. The piece being built right now is the front door itself. Its orders (status, start, stop, restart, logs) now work over HTTP on the local machine, with clear errors; what is still missing is the lock on that door: only platform-labelled containers may be controlled, and callers must present a token (step 3). After that, a final end-to-end test and the Linux checkpoint close the phase.
 
 ## Current Phase
 
@@ -30,7 +30,7 @@ Still to come around that stack: database with users, plans and servers (Phase 3
 
 `ServerService` and `DockerClient` support status, start, stop, restart and logs with controlled errors; a CLI exposes them; 76 default tests and 5 integration tests pass. All of it was verified against a live Docker Engine and the real `minecraft-dev` container. Only Windows + Docker Desktop has been tested; nothing has run on Linux.
 
-Phase 2 (HTTP API) is in progress: the FastAPI skeleton and `/health` exist; the server endpoints do not yet.
+Phase 2 (HTTP API) is in progress: the FastAPI app, `/health` and the server endpoints exist; the label scoping and the token (step 3) do not yet.
 
 ## Phases and Milestones
 
@@ -103,7 +103,7 @@ Approved plan, four steps, one commit each: (1) dependencies, `create_app` skele
 - Error mapping: not found 404, runtime unavailable 503, operation failed 500; raw Docker messages are logged server-side and never returned to clients. Input limits: server name restricted to valid Docker names, `tail` 1-1000, `timeout` 1-300.
 
 - [x] Step 1 — Dependencies (`fastapi`, `uvicorn`; dev: `httpx2` instead of the deprecated `httpx`, as Starlette recommends), `create_app(service)` skeleton and `GET /health` (liveness only, never calls Docker). 2 tests; smoke-checked with a real uvicorn on `127.0.0.1`.
-- [ ] Step 2 — Expose narrowly scoped server lifecycle/status/log endpoints; validate request parameters and return consistent HTTP errors; keep routes thin.
+- [x] Step 2 — Server endpoints (`GET /servers/{name}`, `POST .../start|stop|restart`, `GET .../logs`), HTTP error mapping, input validation and logging (2026-10-20). 31 new API tests (109 default tests in total), mutation-checked (5 mutations detected). Verified by hand with a real uvicorn on `127.0.0.1` against `minecraft-dev`: status, logs, stop, start, restart (200), unknown server (`GET` 200 `not_found`, `POST start` 404), invalid name and `timeout=0` (422). With Docker stopped, the real stack answers 503 with a generic body and `/health` stays 200. Not yet in place: managed-container scoping and the token (step 3), so the API still must only run on `127.0.0.1`.
 - [ ] Step 3 — Managed-container label (`DockerClient` + Compose + CLI) and the temporary token.
 - [ ] Step 4 — HTTP integration test against a throwaway container, document local startup, Linux checkpoint.
 
@@ -191,10 +191,9 @@ Goal: progressively add the controls required for a real hosting business.
 
 ## Immediate Next Step
 
-1. The user decides whether to start Phase 2 (FastAPI). Before implementing it, propose a plan: it adds a dependency (FastAPI + an ASGI server), a new entry point, and the first network boundary (so authentication and exposure need an explicit decision).
-2. Pending decisions carried over from Phase 0: dependency strategy / Linux install test, and pinning the Minecraft image before production.
-
-Phase 1's definition of done is met, so Phase 2 may start once the user approves its plan.
+1. Phase 2, step 3: managed-container label (`DockerClient`, `docker-compose.yml`, CLI, tests; `minecraft-dev` must be recreated, `./data` is untouched) and the temporary API token (environment variable, fail closed). Also decide whether to disable `/docs`.
+2. Then step 4: a production-style launcher (host `127.0.0.1`, logging configured), HTTP integration test against a throwaway container, local startup docs, and the Linux checkpoint (the user wants a setup guide for the Linux environment at that point).
+3. Pending decisions carried over from Phase 0: dependency strategy / Linux install test, and pinning the Minecraft image before production.
 
 ## Out of Scope for Now
 
