@@ -9,7 +9,11 @@ from app.errors import (
     ServerNotFoundError,
     ServerOperationError,
 )
-from app.infrastructure.docker_client import DockerClient
+from app.infrastructure.docker_client import (
+    MANAGED_LABEL,
+    MANAGED_LABEL_VALUE,
+    DockerClient,
+)
 
 
 @pytest.fixture
@@ -17,6 +21,7 @@ def sdk():
     """A fake Docker SDK client whose containers.get returns a fake container."""
     sdk = MagicMock()
     sdk.container = sdk.containers.get.return_value
+    sdk.container.labels = {MANAGED_LABEL: MANAGED_LABEL_VALUE}
     return sdk
 
 
@@ -130,3 +135,34 @@ def test_get_logs_replaces_undecodable_bytes(client, sdk):
     sdk.container.logs.return_value = b"ok \xff\xfe end"
     logs = client.get_logs("minecraft-dev", tail=10)
     assert logs.startswith("ok ") and logs.endswith(" end")
+
+
+ALL_OPERATIONS = [
+    lambda c: c.get_status("other"),
+    lambda c: c.start_container("other"),
+    lambda c: c.stop_container("other", timeout=30),
+    lambda c: c.restart_container("other", timeout=30),
+    lambda c: c.get_logs("other", tail=10),
+]
+ALL_OPERATION_IDS = ["status", "start", "stop", "restart", "logs"]
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [{}, {"unrelated": "x"}, {MANAGED_LABEL: "false"}, {MANAGED_LABEL: ""}],
+    ids=["no-labels", "other-label", "wrong-value", "empty-value"],
+)
+@pytest.mark.parametrize("call", ALL_OPERATIONS, ids=ALL_OPERATION_IDS)
+def test_unmanaged_container_is_reported_as_not_found(client, sdk, call, labels):
+    sdk.container.labels = labels
+    with pytest.raises(ServerNotFoundError) as excinfo:
+        call(client)
+    assert excinfo.value.server_name == "other"
+    for method in ("start", "stop", "restart", "logs"):
+        getattr(sdk.container, method).assert_not_called()
+
+
+def test_managed_container_is_accepted(client, sdk):
+    sdk.container.labels = {MANAGED_LABEL: MANAGED_LABEL_VALUE, "other": "x"}
+    sdk.container.status = "running"
+    assert client.get_status("minecraft-dev") == "running"

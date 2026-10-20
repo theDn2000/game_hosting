@@ -13,6 +13,8 @@ from app.errors import (
 from app.services.server_service import ServerStatus
 
 NAME = "minecraft-dev"
+TOKEN = "test-token-0123456789abcdef"
+AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 
 class FakeService:
@@ -50,7 +52,8 @@ class FakeService:
 
 def make_client(service=None, **kwargs):
     service = service or FakeService()
-    return TestClient(create_app(service), **kwargs), service
+    app = create_app(service, api_token=TOKEN)
+    return TestClient(app, headers=AUTH, **kwargs), service
 
 
 @pytest.mark.parametrize(

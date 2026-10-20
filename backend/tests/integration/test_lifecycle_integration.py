@@ -55,3 +55,19 @@ def test_cli_missing_server_exit_code(capsys):
     code = cli.main(["--server", "game-hosting-it-does-not-exist", "start"])
     assert code == cli.EXIT_NOT_FOUND
     assert "was not found" in capsys.readouterr().err
+
+
+def test_unmanaged_container_is_invisible_and_untouched(
+    sdk, service, unmanaged_container_name
+):
+    name = unmanaged_container_name
+    assert service.get_server_status(name) == ServerStatus.NOT_FOUND
+    for operation in (service.start_server, service.stop_server, service.restart_server):
+        with pytest.raises(ServerNotFoundError):
+            operation(name)
+    with pytest.raises(ServerNotFoundError):
+        service.get_server_logs(name)
+    # The container exists in Docker, and none of the calls above changed it.
+    assert sdk.containers.get(name).status == "created"
+    assert cli.main(["--server", name, "start"]) == cli.EXIT_NOT_FOUND
+    assert sdk.containers.get(name).status == "created"

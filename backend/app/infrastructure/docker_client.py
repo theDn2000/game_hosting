@@ -11,12 +11,20 @@ from app.errors import (
 )
 
 
+MANAGED_LABEL = "game-hosting.managed"
+MANAGED_LABEL_VALUE = "true"
+
+
 class DockerClient:
     """Thin adapter over the Docker SDK.
 
     The connection to Docker is created on first use, so building this object
     never fails when Docker is not running. Docker SDK exceptions are
     translated into application errors and never leave this class.
+
+    Only containers labelled `game-hosting.managed=true` are visible: any other
+    container is reported as not found, so neither the API nor the CLI can
+    control containers that do not belong to the platform.
     """
 
     def __init__(self, client=None):
@@ -55,9 +63,12 @@ class DockerClient:
     def _get_container(self, container_name):
         with self._translate_errors(container_name, "look up"):
             try:
-                return self._get_client().containers.get(container_name)
+                container = self._get_client().containers.get(container_name)
             except NotFound as exc:
                 raise ServerNotFoundError(container_name) from exc
+            if container.labels.get(MANAGED_LABEL) != MANAGED_LABEL_VALUE:
+                raise ServerNotFoundError(container_name)
+            return container
 
     @contextmanager
     def _translate_errors(self, container_name, action):

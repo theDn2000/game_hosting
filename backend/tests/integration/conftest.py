@@ -14,7 +14,11 @@ import pytest
 from docker.errors import DockerException, ImageNotFound, NotFound
 from requests.exceptions import RequestException
 
-from app.infrastructure.docker_client import DockerClient
+from app.infrastructure.docker_client import (
+    MANAGED_LABEL,
+    MANAGED_LABEL_VALUE,
+    DockerClient,
+)
 from app.services.server_service import ServerService
 
 TEST_IMAGE = "alpine:3"
@@ -34,20 +38,40 @@ def sdk():
     return client
 
 
-@pytest.fixture
-def container_name(sdk):
-    """Name of a created (not started) throwaway container that logs a line
-    and then sleeps. `sleep` as PID 1 ignores SIGTERM, so stopping it also
-    exercises the stop timeout path."""
+def _throwaway_container(sdk, labels):
     name = f"game-hosting-it-{uuid.uuid4().hex[:8]}"
     sdk.containers.create(
-        TEST_IMAGE, ["sh", "-c", "echo hello-from-it; exec sleep 300"], name=name
+        TEST_IMAGE,
+        ["sh", "-c", "echo hello-from-it; exec sleep 300"],
+        name=name,
+        labels=labels,
     )
-    yield name
+    return name
+
+
+def _remove(sdk, name):
     try:
         sdk.containers.get(name).remove(force=True)
     except NotFound:
         pass
+
+
+@pytest.fixture
+def container_name(sdk):
+    """Name of a created (not started) managed throwaway container that logs a
+    line and then sleeps. `sleep` as PID 1 ignores SIGTERM, so stopping it also
+    exercises the stop timeout path."""
+    name = _throwaway_container(sdk, {MANAGED_LABEL: MANAGED_LABEL_VALUE})
+    yield name
+    _remove(sdk, name)
+
+
+@pytest.fixture
+def unmanaged_container_name(sdk):
+    """Same throwaway container but WITHOUT the managed label."""
+    name = _throwaway_container(sdk, {})
+    yield name
+    _remove(sdk, name)
 
 
 @pytest.fixture

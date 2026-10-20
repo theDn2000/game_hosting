@@ -2,6 +2,8 @@ from fastapi.testclient import TestClient
 
 from app.api.app import create_app
 
+TOKEN = "test-token-0123456789abcdef"
+
 
 class ExplodingService:
     """Fails the test if the API touches the service."""
@@ -11,12 +13,12 @@ class ExplodingService:
 
 
 def test_health_returns_ok_without_using_the_service():
-    client = TestClient(create_app(ExplodingService()))
+    client = TestClient(create_app(ExplodingService(), api_token=TOKEN))
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
 
 def test_unknown_route_is_404():
-    client = TestClient(create_app(ExplodingService()))
+    client = TestClient(create_app(ExplodingService(), api_token=TOKEN))
     assert client.get("/nope").status_code == 404
