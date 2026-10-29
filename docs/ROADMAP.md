@@ -22,7 +22,7 @@ The product is a stack of layers; each phase adds one. Update this section at th
 
 Still to come around that stack: database with users, plans and servers (Phase 3); creating servers automatically (Phase 5); many servers, backups and monitoring (Phase 6); accounts, payments and subscriptions (Phase 7).
 
-**Where we are:** the engine room works (a developer can control the Minecraft server from the terminal). The HTTP API (the front door, with a lock) is finished and was verified on native Linux (see `docs/LINUX_CHECKPOINT.md`). We are now giving the platform a memory: Phase 3 adds a database that records which servers exist, who owns them and which plan they have, using a platform id instead of the container name. The piece built so far is the foundation of that memory: a PostgreSQL service and the code that connects to it safely. The tables, the repositories and the link between a platform server and its container come next. The API is still localhost-only with a temporary shared token, and WSL2 is not a real server, so one more check on a VPS is advisable before the first deployment.
+**Where we are:** the engine room works (a developer can control the Minecraft server from the terminal). The HTTP API (the front door, with a lock) is finished and was verified on native Linux (see `docs/LINUX_CHECKPOINT.md`). We are now giving the platform a memory: Phase 3 adds a database that records which servers exist, who owns them and which plan they have, using a platform id instead of the container name. Built so far: a PostgreSQL service with a safe connection layer, and the vocabulary of the platform (users, plans and game servers as validated objects, plus the rules a storage must follow, proven with an in-memory version). Next come the real tables and migrations, and the link between a platform server and its container. The API is still localhost-only with a temporary shared token, and WSL2 is not a real server, so one more check on a VPS is advisable before the first deployment.
 
 ## Current Phase
 
@@ -30,7 +30,7 @@ Still to come around that stack: database with users, plans and servers (Phase 3
 
 `ServerService` and `DockerClient` support status, start, stop, restart and logs with controlled errors; a CLI exposes them; 76 default tests and 5 integration tests pass. All of it was verified against a live Docker Engine and the real `minecraft-dev` container. Only Windows + Docker Desktop has been tested; nothing has run on Linux.
 
-Phase 2 (HTTP API) is complete (verified on Linux, 2026-10-29). Phase 3 (domain model and persistence) is in progress: step 1 of 5, the database infrastructure, is done.
+Phase 2 (HTTP API) is complete (verified on Linux, 2026-10-29). Phase 3 (domain model and persistence) is in progress: steps 1 (database infrastructure) and 2 (domain model and repository interfaces) of 5 are done.
 
 ## Phases and Milestones
 
@@ -136,8 +136,8 @@ Decisions (2026-10-29):
 - Records are created in this phase only by adopting an existing container with a CLI command; creating servers from scratch is Phase 5.
 
 - [x] Step 1 — Database infrastructure (2026-10-29): `postgres:18` service in `docker-compose.yml` (container `game-hosting-db`, named volume, published only on `127.0.0.1`, no `game-hosting.managed` label so the API and CLI cannot touch it, credentials from the git-ignored `.env`, see `.env.example`); `SQLAlchemy 2.1.6` and `psycopg 3.3.6` added; connection layer in `app/infrastructure/db/database.py` (`create_database_engine`, `create_session_factory`, `check_connection`, `redact_url`) with a `DatabaseUnavailableError` application error and passwords never shown. 230 default tests pass on Windows and on Linux; 17 integration tests (5 new, against a throwaway PostgreSQL container) pass on Ubuntu 24.04; mutation-checked (6 mutations detected, one initially survived and its test was strengthened). The Compose service was verified on Linux: healthy, bound to `127.0.0.1` only, data survives removing and recreating the container, and the CLI reports it as not found and cannot stop it. Not yet verified: the integration tests with Docker Desktop on Windows (it was off).
-- [ ] Define minimal User, GameServer, Plan, and Node concepts, adding Subscription when needed.
-- [ ] Give each platform server a stable internal ID separate from its runtime container name.
+- [x] Step 2 — Domain model, repository interfaces and in-memory reference implementation (2026-10-29). `app/domain/models.py`: immutable, self-validating `User`, `Plan` and `GameServer` dataclasses with `new` factories (UUID v4 ids, UTC timestamps, normalised e-mail; generated container name `gh-<uuid hex>` unless an existing one is adopted). `app/services/repositories.py`: `UserRepository`, `PlanRepository`, `GameServerRepository` and `UnitOfWork` protocols (changes are permanent only on `commit()`). New application errors: `InvalidDataError`, `UserNotFoundError`, `PlanNotFoundError`, `AlreadyExistsError`. `tests/support/in_memory.py` implements the contract; `tests/repositories/test_repository_contract.py` is written against the interfaces so the PostgreSQL implementation (step 3) must pass the same tests. 97 new tests (327 in total on Windows and on Ubuntu with Python 3.12; the contract tests were repeated 30 times without flakiness); 17 mutations detected. Refinement of the agreed design: the plan's CPU allowance is stored as `cpu_millicores` (integer, 1000 = one core) instead of `cpu_limit`, which avoids floating-point values and converts exactly to Docker's CPU quota. Integration tests on Windows with Docker Desktop also passed (17).
+- [x] Give each platform server a stable internal ID separate from its runtime container name. (Modelled in step 2: `GameServer.id` is a UUID, `container_name` is internal. Exposed through the API in step 4.)
 - [ ] Introduce PostgreSQL and migrations only when the model and API need persistence.
 - [ ] Define repository boundaries where they help keep application logic testable.
 
@@ -209,7 +209,7 @@ Goal: progressively add the controls required for a real hosting business.
 
 ## Immediate Next Step
 
-1. Phase 3, step 2: the domain model (`User`, `Plan`, `GameServer` as plain dataclasses), the repository interfaces, in-memory fakes and unit tests. Before that, run the integration tests on Windows once Docker Desktop is on (they passed on Ubuntu 24.04 under WSL2, available with `wsl -d Ubuntu-24.04`).
+1. Phase 3, step 3: SQLAlchemy models, the Alembic baseline migration, the PostgreSQL implementation of the repositories and unit of work, and integration tests against a throwaway PostgreSQL (migration up/down, models-versus-migrations check, and the repository contract tests running against PostgreSQL as well). Adds the `alembic` dependency.
 2. Pending decisions carried over from earlier phases: the dependency strategy (full freeze versus direct dependencies plus a lock file), and pinning the Minecraft image before production.
 
 ## Out of Scope for Now
