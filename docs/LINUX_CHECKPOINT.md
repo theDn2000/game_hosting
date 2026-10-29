@@ -2,6 +2,45 @@
 
 A guided check that the project works on Linux, which is the intended production platform. Do it before starting Phase 3. It needs about an hour the first time.
 
+## Result: executed on 2026-10-29 (WSL2, Ubuntu 24.04)
+
+Run by Claude from the VS Code terminal in a native Ubuntu 24.04.5 distribution under WSL2, with its **own Docker Engine 29.9.2** (cgroup v2, systemd driver, overlayfs), Python 3.12.3 and the repository cloned from the local commit `7ebdb22` into the Linux home directory (ext4). Docker Desktop's integration was not involved.
+
+| Check | Result |
+|---|---|
+| `pip install -r requirements-dev.txt`, `pip check` | OK; `pywin32` correctly **not** installed |
+| Default test suite | **215 passed** |
+| Integration tests (native Linux Docker Engine) | **12 passed** (throwaway `alpine:3` containers; none left over) |
+| `docker compose up -d` with the label | `minecraft-dev` `healthy`; label `game-hosting.managed=true` present |
+| CLI: status, stop (twice), start, restart, logs, unknown server | all as expected; unknown server exits with 3 |
+| API as an unprivileged user (`dani`, not root) | `/health` 200; no token 401; token 200; stop/start 200; unknown server 404; `/docs` 404; the token is absent from the log |
+| API without a token | refuses to start (exit 1) |
+| World persistence (`compose down`, then `up`) | identical: 26 files, 2360 KB, 4 region files, loaded normally |
+| Graceful stop through the CLI | about 0.9 s, container exit code 0, log shows "Stopping server" and "Saving worlds" |
+| cgroup limits (`--memory 64m --cpus 0.5`) | enforced (`memory.max=67108864`, `cpu.max=50000 100000`) |
+
+**Not covered, because WSL2 is not a server:** real network exposure (WSL2 shares one NAT network between distributions, so the Linux test server used port 25566 to avoid a clash with Docker Desktop's 25565), performance, firewalling, and anything about a hosting provider. A VPS check is still advisable before the first real deployment.
+
+### Findings that matter for production
+
+1. **`./data` is owned by uid 1000, whatever user ran Compose.** The itzg image runs the server as uid/gid 1000 and fixes the ownership of `/data` itself. `data/world/level.dat` is mode `600`, so only uid 1000 (or root) can read the world's main file. A backup or restore job running as another user will fail unless it runs as uid 1000, as root, or from inside the container (design this in Phase 6; the image's `UID`/`GID` settings may also help).
+2. **Membership of the `docker` group is root-equivalent.** The API ran fine as an ordinary user in that group. In production, use a dedicated unprivileged user for the API, keep the Docker socket off the network, and consider rootless Docker or a socket proxy later.
+3. **Docker Desktop and a native engine can coexist in WSL2**, but they share ports and memory; stop one before testing the other if you hit "port already in use".
+4. **WSL appends the Windows `PATH` to Linux by default**, which makes Linux find Windows tools (`docker`, `python`). The environment was configured with `appendWindowsPath=false`.
+
+## How the Ubuntu environment was built (reproducible)
+
+Done without administrator rights, because WSL2 was already installed for Docker Desktop:
+
+1. `wsl --install -d Ubuntu-24.04 --no-launch`
+2. As root (`wsl -d Ubuntu-24.04 -u root`): create the user `dani` (`useradd -m -s /bin/bash -G sudo dani`) and write `/etc/wsl.conf` with `[boot] systemd=true`, `[user] default=dani` and `[interop] appendWindowsPath=false`; then `wsl --terminate Ubuntu-24.04`.
+3. Install `ca-certificates curl gnupg git python3-venv python3-pip`, add Docker's apt repository after **checking the key fingerprint** (`9DC858229FC7DD38854AE2D88D81803C0EBFCD88`), install `docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin`, `usermod -aG docker dani` and `systemctl enable --now docker`.
+4. As `dani`: `git clone /mnt/c/Users/Dani/Documents/Repositorios/mmorpg/game_hosting ~/game_hosting` (a local clone of the committed state, so no `git push` was needed), create `backend/.venv`, install `requirements-dev.txt`.
+
+The `dani` account has no password set. To use `sudo` from inside Ubuntu, set one with `wsl -d Ubuntu-24.04 -u root passwd dani`. Open the environment with `wsl -d Ubuntu-24.04` (it starts in the Windows directory; run `cd ~/game_hosting`).
+
+The rest of this document is the original step-by-step guide, still valid for repeating the check on a fresh machine or a VPS.
+
 ## What we want to learn
 
 1. The dependencies install on Linux (`pywin32` must be skipped).

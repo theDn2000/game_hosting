@@ -22,7 +22,7 @@ The product is a stack of layers; each phase adds one. Update this section at th
 
 Still to come around that stack: database with users, plans and servers (Phase 3); creating servers automatically (Phase 5); many servers, backups and monitoring (Phase 6); accounts, payments and subscriptions (Phase 7).
 
-**Where we are:** the engine room works (a developer can control the Minecraft server from the terminal). We are building the HTTP API, so that something other than a terminal can control it. The piece being built right now is the front door itself. Its orders (status, start, stop, restart, logs) work over HTTP on the local machine, with clear errors, and the door now has a lock: only platform-labelled containers can be controlled, callers must present a token, and the API refuses to start without one. The local part of the phase is finished: an end-to-end HTTP test passes against a real API process, logging is configured, and `docs/RUNNING.md` explains how to start and use everything. What remains is the Linux checkpoint, which only the user can run (guide: `docs/LINUX_CHECKPOINT.md`). It is still a localhost-only API with a temporary shared token, not a public service.
+**Where we are:** the engine room works (a developer can control the Minecraft server from the terminal). We are building the HTTP API, so that something other than a terminal can control it. The piece being built right now is the front door itself. Its orders (status, start, stop, restart, logs) work over HTTP on the local machine, with clear errors, and the door now has a lock: only platform-labelled containers can be controlled, callers must present a token, and the API refuses to start without one. The phase is finished: an end-to-end HTTP test passes against a real API process, logging is configured, `docs/RUNNING.md` explains how to start and use everything, and the whole stack has been verified on native Linux (Ubuntu 24.04 under WSL2 with its own Docker Engine, 2026-10-29; see `docs/LINUX_CHECKPOINT.md`). It is still a localhost-only API with a temporary shared token, not a public service, and WSL2 is not a real server, so one more check on a VPS is advisable before the first deployment.
 
 ## Current Phase
 
@@ -30,7 +30,7 @@ Still to come around that stack: database with users, plans and servers (Phase 3
 
 `ServerService` and `DockerClient` support status, start, stop, restart and logs with controlled errors; a CLI exposes them; 76 default tests and 5 integration tests pass. All of it was verified against a live Docker Engine and the real `minecraft-dev` container. Only Windows + Docker Desktop has been tested; nothing has run on Linux.
 
-Phase 2 (HTTP API) is complete locally: the FastAPI app, the server endpoints, the managed-container label, the token, the fail-closed entry point, logging, the HTTP end-to-end test and the startup docs exist. Only the Linux checkpoint (run by the user) remains.
+Phase 2 (HTTP API) is complete: the FastAPI app, the server endpoints, the managed-container label, the token, the fail-closed entry point, logging, the HTTP end-to-end test, the startup docs and the Linux checkpoint (2026-10-29) exist. Phase 3 has not started.
 
 ## Phases and Milestones
 
@@ -54,7 +54,7 @@ Repository hygiene (found and applied on 2026-10-14, committed):
 - [x] Re-encode `backend/requirements.txt` from UTF-16 LE with BOM to UTF-8. Verified: `pip install --dry-run -r requirements.txt` parses it.
 - [x] Make `pywin32` Windows-only with the marker `; sys_platform == "win32"`. Verified that the marker evaluates to false for `linux` and true for `win32`. A real install on Linux has not been tested.
 - [ ] Decide the long-term dependency strategy (direct dependencies only plus a lock file, or the current full pin). Deliberately postponed by the user; see the open decision in `docs/ARCHITECTURE.md`.
-- [ ] Test `pip install -r backend/requirements.txt` on a real Linux environment (postponed with the decision above).
+- [x] Test `pip install -r backend/requirements.txt` on a real Linux environment. Done 2026-10-29 on Ubuntu 24.04 (Python 3.12.3): installs cleanly, `pywin32` is skipped, `pip check` passes. The dependency strategy itself is still open.
 
 **Definition of done**
 - The server can be started and stopped using Docker Compose.
@@ -90,7 +90,7 @@ Approved plan (2026-10-15), four steps, one commit each: (1) errors + `DockerCli
 
 ### Phase 2 — HTTP API
 
-**Status: Complete locally (2026-10-20); the Linux checkpoint is pending the user.**
+**Status: Complete (local work 2026-10-20; Linux checkpoint 2026-10-29).**
 
 Goal: expose the existing application service through FastAPI without rewriting its behavior.
 
@@ -107,7 +107,8 @@ Approved plan, four steps, one commit each: (1) dependencies, `create_app` skele
 - [x] Step 3 — Managed-container label (`DockerClient` + Compose + CLI), temporary bearer token, docs off by default, and `app/api/entrypoint.py` (fail-closed configuration from environment variables) (2026-10-20). 199 default tests and 6 integration tests pass; 8 mutations were detected (label check, token check, an unprotected route, docs switch, minimum token length, fail-closed entry point, log escaping). `minecraft-dev` was recreated with the label and `./data` was intact (same size, 12 region files, loaded normally). Verified with real uvicorn processes: no token or a short token refuses to start (exit 1); with a token, `/health` 200, no or wrong token 401, correct token 200 for status/stop/start/logs, unknown server 404, `/docs` and `/openapi.json` 404, `/docs` 200 only with `GAME_HOSTING_API_DOCS=1` (its routes still 401), and the token never appears in the server log.
 - [x] Step 4 (local part, 2026-10-20) — Logging configuration (`GAME_HOSTING_LOG_LEVEL`), HTTP end-to-end integration tests (a real uvicorn subprocess driven over HTTP against throwaway containers; 6 tests), startup and usage documentation (`docs/RUNNING.md`, commands checked in PowerShell) and the Linux checkpoint guide (`docs/LINUX_CHECKPOINT.md`). 215 default and 12 integration tests pass on Python 3.14 and, in a temporary environment, on Python 3.12.15. Mutation checks detected the changes to logging, token handling and the unprotected-route cases (the HTTP tests only probe `start` without a token; the unit suite covers every route).
 - [x] Portability fix found while preparing Linux: `ServerService` raised `NameError` on Python < 3.14 because `DockerClient` was imported only under `TYPE_CHECKING` (introduced in Phase 1 step 3, invisible on 3.14). Fixed with `from __future__ import annotations` (commit `e0d445e`) and guarded by `tests/test_portability.py`.
-- [ ] Linux checkpoint — run by the user following `docs/LINUX_CHECKPOINT.md` (needs `git push` first, since the local branch is ahead of GitHub); then record the result here, fix what it exposes and note the Linux-specific production requirements (Docker socket permissions, dedicated non-root user, `./data` ownership).
+- [x] Linux checkpoint (2026-10-29) — run by Claude in a native Ubuntu 24.04.5 under WSL2 with its own Docker Engine 29.9.2 (cgroup v2), Python 3.12.3, the repository cloned from the local commit. 215 default tests and 12 integration tests pass; `minecraft-dev` starts healthy with the label; CLI and API work (the API as an unprivileged user); the world survives `compose down` and `up` (26 files, 2360 KB, 4 region files, identical); `cli.py stop` is graceful (about 0.9 s, exit code 0, worlds saved); cgroup memory and CPU limits are enforced. Full table, findings and the reproducible setup are in `docs/LINUX_CHECKPOINT.md`. Not covered because WSL2 is not a server: real network exposure, performance and provider specifics, so a VPS check is still advisable before the first deployment.
+- [ ] Linux findings to design for later phases: (1) the itzg image owns `./data` as uid/gid 1000 and `level.dat` is mode 600, so Phase 6 backups must run as uid 1000, as root, or from inside the container; (2) the `docker` group is root-equivalent, so production needs a dedicated unprivileged API user and a Docker socket that never reaches the network; (3) pin the Minecraft image/version before production.
 
 **Definition of done**
 - API endpoints reuse the controller's application logic.
@@ -193,9 +194,8 @@ Goal: progressively add the controls required for a real hosting business.
 
 ## Immediate Next Step
 
-1. The user runs the Linux checkpoint (`docs/LINUX_CHECKPOINT.md`) and reports the results. Phase 2 is closed after that, and before Phase 3 starts.
-2. Then Phase 3 (domain model and persistence): propose a plan first. It introduces PostgreSQL (a new service and dependency), the first data model, and the server-ownership design noted under Open Questions.
-3. Pending decisions carried over from Phase 0: dependency strategy / Linux install test, and pinning the Minecraft image before production.
+1. Phase 3 (domain model and persistence): propose a plan first, and wait for approval. It introduces PostgreSQL (a new service and dependency), the first data model, and the server-ownership design noted under Open Questions. Ubuntu 24.04 in WSL2 (`wsl -d Ubuntu-24.04`, repository in `~/game_hosting`) is available for Linux-side work.
+2. Pending decisions carried over from earlier phases: the dependency strategy (full freeze versus direct dependencies plus a lock file), and pinning the Minecraft image before production.
 
 ## Out of Scope for Now
 
