@@ -1,15 +1,16 @@
 """Contract tests for the persistence interfaces (`app.services.repositories`).
 
 They are written against the interfaces, not an implementation. The
-`uow_factory` fixture decides which implementation runs; today only the
-in-memory one, and the PostgreSQL implementation joins in Phase 3 step 3, so
-both must behave identically.
+`uow_factory` fixture runs every test twice: against the in-memory reference
+implementation (default suite) and against the PostgreSQL implementation
+(integration suite, `pytest -m integration`). Both must behave identically.
 """
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import text
 
 from app.domain.models import GameServer, Plan, User
 from app.errors import (
@@ -18,17 +19,27 @@ from app.errors import (
     ServerNotFoundError,
     UserNotFoundError,
 )
+from app.infrastructure.db.database import create_database_engine, create_session_factory
+from app.infrastructure.db.repositories import SqlUnitOfWork
 from tests.support.in_memory import InMemoryStore, InMemoryUnitOfWork
 
 T0 = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
 
 
-@pytest.fixture(params=["memory"])
+@pytest.fixture(
+    params=["memory", pytest.param("postgres", marks=pytest.mark.integration)]
+)
 def uow_factory(request):
     if request.param == "memory":
         store = InMemoryStore()
         return lambda: InMemoryUnitOfWork(store)
-    raise AssertionError(request.param)
+    # A migrated PostgreSQL database shared by the session; emptied before each test.
+    engine = create_database_engine(request.getfixturevalue("migrated_database_url"))
+    request.addfinalizer(engine.dispose)
+    with engine.begin() as connection:
+        connection.execute(text("TRUNCATE game_servers, plans, users"))
+    session_factory = create_session_factory(engine)
+    return lambda: SqlUnitOfWork(session_factory)
 
 
 def make_user(email="ana@example.com", **overrides):
@@ -279,3 +290,84 @@ def test_failed_unit_does_not_leave_a_half_written_state(uow_factory):
             uow.commit()
     with uow_factory() as uow:
         assert uow.plans.find_by_slug(plan.slug) is None
+
+
+# --- behaviours that differ most between implementations ----------------------
+
+
+def test_a_rejected_add_does_not_poison_the_unit(uow_factory):
+    first, second = make_user("first@example.com"), make_user("second@example.com")
+    with uow_factory() as uow:
+        uow.users.add(first)
+        with pytest.raises(AlreadyExistsError):
+            uow.users.add(make_user("first@example.com"))
+        uow.users.add(second)  # the unit is still usable after the rejection
+        uow.commit()
+    with uow_factory() as uow:
+        assert uow.users.find_by_email(first.email) == first
+        assert uow.users.find_by_email(second.email) == second
+
+
+def test_uncommitted_changes_are_invisible_to_other_units(uow_factory):
+    user = make_user()
+    with uow_factory() as writer:
+        writer.users.add(user)
+        with uow_factory() as reader:
+            assert reader.users.find_by_email(user.email) is None
+        writer.commit()
+    with uow_factory() as reader:
+        assert reader.users.find_by_email(user.email) == user
+
+
+def test_timestamps_keep_their_instant_across_time_zones_and_precision(uow_factory):
+    precise = datetime(2026, 10, 29, 12, 0, 0, 123456, tzinfo=timezone(timedelta(hours=2)))
+    user = User.new("tz@example.com", created_at=precise)
+    with uow_factory() as uow:
+        uow.users.add(user)
+        uow.commit()
+    with uow_factory() as uow:
+        stored = uow.users.get(user.id)
+    assert stored.created_at == precise  # same instant, microseconds included
+    assert stored.created_at.tzinfo is not None
+    assert stored == user
+
+
+def test_unicode_text_round_trips(uow_factory, seeded):
+    owner, plan = seeded
+    server = make_server(owner, plan, "Mundo ñandú 🌍 世界")
+    with uow_factory() as uow:
+        uow.servers.add(server)
+        uow.commit()
+    with uow_factory() as uow:
+        assert uow.servers.get(server.id).name == "Mundo ñandú 🌍 世界"
+
+
+def test_the_longest_valid_values_are_accepted(uow_factory):
+    owner = User.new("a" * 240 + "@example.com", created_at=T0)
+    plan = Plan.new("p" * 63, "N" * 100, memory_mb=1_048_576, cpu_millicores=256_000)
+    server = GameServer.new(
+        owner.id, plan.id, "S" * 64, container_name="c" * 64, created_at=T0
+    )
+    with uow_factory() as uow:
+        uow.users.add(owner)
+        uow.plans.add(plan)
+        uow.servers.add(server)
+        uow.commit()
+    with uow_factory() as uow:
+        assert uow.users.get(owner.id) == owner
+        assert uow.plans.get(plan.id) == plan
+        assert uow.servers.get(server.id) == server
+
+
+def test_servers_of_other_owners_are_not_disturbed_by_a_failed_add(uow_factory, seeded):
+    owner, plan = seeded
+    kept = make_server(owner, plan, "kept", container_name="kept-1")
+    with uow_factory() as uow:
+        uow.servers.add(kept)
+        uow.commit()
+    with uow_factory() as uow:
+        with pytest.raises(AlreadyExistsError):
+            uow.servers.add(make_server(owner, plan, "dup", container_name="kept-1"))
+        uow.commit()  # committing after a rejected add must not lose or add anything
+    with uow_factory() as uow:
+        assert uow.servers.list_all() == [kept]

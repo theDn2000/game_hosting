@@ -39,6 +39,8 @@ docker compose stop minecraft    # stop it (data is kept)
 docker compose down              # remove all containers of this project (data and volumes are kept)
 ```
 
+The `minecraft` service carries the label `game-hosting.managed: "true"`. **Only labelled containers can be controlled** by the CLI and the API; an unlabelled container is reported as "not found". If you created `minecraft-dev` before the label existed, run `docker compose up -d` again: Compose recreates it (the world in `./data` is untouched).
+
 ### The database (PostgreSQL 18)
 
 ```powershell
@@ -50,7 +52,25 @@ docker compose ps                # it should become "healthy"
 - `docker compose down` keeps the data; **`docker compose down -v` deletes the `postgres-data` volume, that is, the whole database.**
 - The connection URL, used by the code that talks to the database, is `postgresql+psycopg://<user>:<password>@127.0.0.1:5432/<db>` and is read from the `GAME_HOSTING_DATABASE_URL` environment variable of the process that needs it. The API does not use the database yet (it will in Phase 3 step 4). Treat the URL as a secret, because it contains the password.
 
-The Compose service carries the label `game-hosting.managed: "true"`. **Only labelled containers can be controlled** by the CLI and the API; an unlabelled container is reported as "not found". If you created `minecraft-dev` before the label existed, run `docker compose up -d` again: Compose recreates it (the world in `./data` is untouched).
+### Database migrations (Alembic)
+
+The tables are created and changed only by migrations, never by the application. Run them from `backend/`, with the database up and the URL in the environment of that terminal:
+
+```powershell
+cd backend
+$pw = (Get-Content ..\.env | Where-Object { $_ -like 'POSTGRES_PASSWORD=*' }) -replace '^POSTGRES_PASSWORD=', ''
+$env:GAME_HOSTING_DATABASE_URL = "postgresql+psycopg://gamehosting:$pw@127.0.0.1:5432/gamehosting"
+
+.\.venv\Scripts\python.exe -m alembic current        # which revision the database is at
+.\.venv\Scripts\python.exe -m alembic upgrade head   # apply every pending migration
+.\.venv\Scripts\python.exe -m alembic check          # the models and the database must not differ
+.\.venv\Scripts\python.exe -m alembic history        # list the revisions
+```
+
+- `alembic.ini` contains no URL or secret; `GAME_HOSTING_DATABASE_URL` is the only source. Without it Alembic stops with a message saying so.
+- Run `upgrade head` after pulling code that adds a revision, and before starting an API version that needs the new schema. The API never migrates on its own.
+- **`alembic downgrade base` drops all the tables and therefore all the data.** Use it only on a database you can lose. Downgrades are tested, but they are not a backup.
+- To change the schema: edit `app/infrastructure/db/models.py`, then add a new hand-written revision under `backend/migrations/versions/` (copy the style of `0001_initial_schema.py` and use explicit constraint names). Never edit a revision that was already applied anywhere. The tests then check that the models and the migrations agree, and that every revision upgrades and downgrades.
 
 ## 3. The CLI
 

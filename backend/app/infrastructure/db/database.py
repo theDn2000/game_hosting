@@ -5,6 +5,8 @@ translated into `DatabaseUnavailableError`, and passwords never appear in
 messages (URLs are always redacted before being shown).
 """
 
+from contextlib import contextmanager
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import ArgumentError, InterfaceError, OperationalError
@@ -48,13 +50,24 @@ def create_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(engine, expire_on_commit=False)
 
 
-def check_connection(engine: Engine):
-    """Raise DatabaseUnavailableError unless a trivial query succeeds."""
+@contextmanager
+def translate_connection_errors(engine: Engine):
+    """Turn connection-level SQLAlchemy errors into DatabaseUnavailableError.
+
+    The message carries the redacted URL and the driver's text (which never
+    includes the password).
+    """
     try:
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
+        yield
     except (OperationalError, InterfaceError) as exc:
         detail = str(getattr(exc, "orig", None) or exc.__class__.__name__).strip()
         raise DatabaseUnavailableError(
             f"Cannot reach the database {redact_url(engine.url)}: {detail}"
         ) from exc
+
+
+def check_connection(engine: Engine):
+    """Raise DatabaseUnavailableError unless a trivial query succeeds."""
+    with translate_connection_errors(engine):
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))

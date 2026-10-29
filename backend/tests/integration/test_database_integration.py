@@ -7,7 +7,7 @@ from app.infrastructure.db.database import (
     create_database_engine,
     create_session_factory,
 )
-from tests.integration.conftest import POSTGRES_DB, POSTGRES_USER
+from tests.support.postgres import POSTGRES_DB, POSTGRES_USER
 
 pytestmark = pytest.mark.integration
 
