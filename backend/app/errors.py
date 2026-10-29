@@ -24,3 +24,7 @@ class RuntimeUnavailableError(GameHostingError):
 
 class ServerOperationError(GameHostingError):
     """The runtime was reachable but failed to perform the operation."""
+
+
+class DatabaseUnavailableError(GameHostingError):
+    """The platform database (PostgreSQL) cannot be reached."""

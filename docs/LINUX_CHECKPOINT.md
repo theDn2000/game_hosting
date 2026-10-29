@@ -131,11 +131,16 @@ Expected: 215 default tests and 12 integration tests pass. Copy the last lines o
 
 ```bash
 cd ~/game_hosting
-docker compose up -d
+# Compose requires a .env file (Phase 3 added a database service that needs POSTGRES_PASSWORD):
+cp .env.example .env
+sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')|" .env
+docker compose up -d minecraft
 docker compose ps
 docker logs --tail 20 minecraft-dev
 ls -ln data | head          # who owns the files the server created?
 ```
+
+(The results table above was produced before the database service existed, so it started only Minecraft. To check the database as well, run `docker compose up -d postgres` and see `docs/RUNNING.md`; that was verified on Linux on 2026-10-29, see the roadmap.)
 
 The first start downloads the server and creates `./data`. Expected: the container becomes `healthy` within a minute or two. If it does not, send me `docker logs minecraft-dev` and the output of `ls -ln data`; the most likely cause is file ownership of the bind-mounted directory.
 

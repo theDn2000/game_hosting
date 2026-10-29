@@ -17,15 +17,38 @@ python -m venv .venv
 
 Use `requirements.txt` instead if you only need to run the app (no tests).
 
-## 2. The Minecraft server
+## 2. Local configuration (`.env`) and the services
+
+Docker Compose reads a git-ignored `.env` file in the repository root. **It is required**, because the Compose file needs `POSTGRES_PASSWORD` (even to start only Minecraft). Create it once:
+
+```powershell
+Copy-Item .env.example .env
+# then edit .env and set POSTGRES_PASSWORD to a long random value, for example the output of:
+.\backend\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Never commit `.env`. Variables: `POSTGRES_PASSWORD` (required), and optionally `POSTGRES_USER`, `POSTGRES_DB` (default `gamehosting`) and `POSTGRES_PORT` (default `5432`, host port on `127.0.0.1`; change it if it is taken, for example when Docker Desktop and a Docker Engine inside WSL both run on the machine).
+
+### The Minecraft server
 
 From the repository root:
 
 ```powershell
-docker compose up -d      # create/start minecraft-dev (world data lives in ./data)
-docker compose stop       # stop it (data is kept)
-docker compose down       # remove the container (data is kept)
+docker compose up -d minecraft   # create/start minecraft-dev (world data lives in ./data)
+docker compose stop minecraft    # stop it (data is kept)
+docker compose down              # remove all containers of this project (data and volumes are kept)
 ```
+
+### The database (PostgreSQL 18)
+
+```powershell
+docker compose up -d postgres    # container game-hosting-db, data in the named volume postgres-data
+docker compose ps                # it should become "healthy"
+```
+
+- It listens only on `127.0.0.1:5432`. It has no `game-hosting.managed` label on purpose, so the CLI and the API can never control it (`cli.py --server game-hosting-db status` reports `not_found`).
+- `docker compose down` keeps the data; **`docker compose down -v` deletes the `postgres-data` volume, that is, the whole database.**
+- The connection URL, used by the code that talks to the database, is `postgresql+psycopg://<user>:<password>@127.0.0.1:5432/<db>` and is read from the `GAME_HOSTING_DATABASE_URL` environment variable of the process that needs it. The API does not use the database yet (it will in Phase 3 step 4). Treat the URL as a secret, because it contains the password.
 
 The Compose service carries the label `game-hosting.managed: "true"`. **Only labelled containers can be controlled** by the CLI and the API; an unlabelled container is reported as "not found". If you created `minecraft-dev` before the label existed, run `docker compose up -d` again: Compose recreates it (the world in `./data` is untouched).
 
