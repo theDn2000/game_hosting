@@ -9,28 +9,29 @@ The product is a stack of layers; each phase adds one. Update this section at th
 ```
  Customer's browser
         |
- [ Web panel ]        Phase 4   not started    what customers click
+ [ Web panel ]         Phase 4   not started   what customers click, and where they log in
         |
- [ HTTP API ]         Phase 2   IN PROGRESS    the front door: lets programs and the panel give orders
+ [ HTTP API ]          Phase 2   done          the front door, with a lock (token); servers addressed by platform id
         |
- [ ServerService ]    Phase 1   done           the rules: "start / stop / restart / status / logs"
-        |
- [ DockerClient ]     Phase 1   done           the translator that talks to Docker
-        |
- Docker Engine  ->  game containers (today: one Minecraft server, `minecraft-dev`)
+ [ ServerRegistry ]    Phase 3   done          "which server is this?": platform id -> container, using the database
+      |            |
+ [ PostgreSQL ]   [ ServerService ]   Phase 3 / Phase 1   done   memory of users, plans and servers / the rules to start, stop, restart, read logs
+                       |
+                [ DockerClient ]     Phase 1   done           the translator that talks to Docker
+                       |
+ Docker Engine  ->  game containers (today: one Minecraft server, registered as a platform server)
 ```
 
-Still to come around that stack: database with users, plans and servers (Phase 3); creating servers automatically (Phase 5); many servers, backups and monitoring (Phase 6); accounts, payments and subscriptions (Phase 7).
+Still to come: sign-up, login and a web panel, with ownership actually enforced (Phase 4); creating servers automatically and applying plan limits (Phase 5); many servers and nodes, backups and monitoring (Phase 6); payments and subscriptions (Phase 7).
 
-**Where we are:** the HTTP API (the front door, with a lock) is finished and verified on native Linux (see `docs/LINUX_CHECKPOINT.md`). We are giving the platform a memory: Phase 3 adds a database that records which servers exist, who owns them and which plan they have, using a platform id instead of the container name. Built so far: the PostgreSQL service, the real tables with versioned migrations, storage code proven identical to a reference version by the same tests, and now the link between a platform server and its container. The API addresses servers by UUID and never shows container names, and an operator CLI can register plans and adopt existing containers. What is left in the phase is registering the real `minecraft-dev` server (needs the owner's e-mail, chosen by the user) and the final closing step. Ownership is stored but not enforced until users can log in (Phase 4). The API is still localhost-only with a temporary shared token, and WSL2 is not a real server, so one more check on a VPS is advisable before the first deployment.
+**Where we are:** the platform now has a memory and a working skeleton from the database down to the container. A server has a platform id (a UUID) that customers will see, and its Docker container name stays internal. The real `minecraft-dev` server is registered in the development database (owner and plan recorded), the HTTP API controls it by that id, and an operator command-line tool puts data in. What does not exist yet is anyone other than the operator: there is no sign-up or login, so the owner of each server is stored but not yet enforced, and the shared API token acts as the operator. The API is still localhost-only, and WSL2 is not a real server, so one more check on a VPS is advisable before the first deployment.
 
 ## Current Phase
 
-**Phase 1 — Local server controller: complete (verified 2026-10-15), pending the user's decision to start Phase 2.**
+**Phase 3 — Domain model and persistence: complete (2026-11-04).**
 
-`ServerService` and `DockerClient` support status, start, stop, restart and logs with controlled errors; a CLI exposes them; 76 default tests and 5 integration tests pass. All of it was verified against a live Docker Engine and the real `minecraft-dev` container. Only Windows + Docker Desktop has been tested; nothing has run on Linux.
+Phase 4 (web panel and authentication) has not started. Two decisions carried over from earlier phases are still open: the dependency strategy (full freeze versus direct dependencies plus a lock file) and pinning the Minecraft image and version before production.
 
-Phase 2 (HTTP API) is complete (verified on Linux, 2026-10-29). Phase 3 (domain model and persistence) is in progress: steps 1 (database infrastructure), 2 (domain model and repository interfaces), 3 (real persistence and migrations) and 4 (registry, UUID-based API, administration CLI) of 5 are done; the real `minecraft-dev` server still has to be adopted, and step 5 closes the phase.
 
 ## Phases and Milestones
 
@@ -119,7 +120,7 @@ Approved plan, four steps, one commit each: (1) dependencies, `create_app` skele
 
 ### Phase 3 — Domain model and persistence
 
-**Status: In progress (started 2026-10-29).**
+**Status: Complete (2026-10-29 to 2026-11-04).**
 
 Goal: represent platform concepts independently from Docker container names.
 
@@ -139,6 +140,8 @@ Decisions (2026-10-29):
 - [x] Step 2 — Domain model, repository interfaces and in-memory reference implementation (2026-10-29). `app/domain/models.py`: immutable, self-validating `User`, `Plan` and `GameServer` dataclasses with `new` factories (UUID v4 ids, UTC timestamps, normalised e-mail; generated container name `gh-<uuid hex>` unless an existing one is adopted). `app/services/repositories.py`: `UserRepository`, `PlanRepository`, `GameServerRepository` and `UnitOfWork` protocols (changes are permanent only on `commit()`). New application errors: `InvalidDataError`, `UserNotFoundError`, `PlanNotFoundError`, `AlreadyExistsError`. `tests/support/in_memory.py` implements the contract; `tests/repositories/test_repository_contract.py` is written against the interfaces so the PostgreSQL implementation (step 3) must pass the same tests. 97 new tests (327 in total on Windows and on Ubuntu with Python 3.12; the contract tests were repeated 30 times without flakiness); 17 mutations detected. Refinement of the agreed design: the plan's CPU allowance is stored as `cpu_millicores` (integer, 1000 = one core) instead of `cpu_limit`, which avoids floating-point values and converts exactly to Docker's CPU quota. Integration tests on Windows with Docker Desktop also passed (17).
 - [x] Step 3 — Real persistence (2026-10-29). `app/infrastructure/db/models.py` (tables `users`, `plans`, `game_servers` with UUID keys, `timestamptz` times, CHECK constraints that repeat the domain's rules, unique constraints, foreign keys with `ON DELETE RESTRICT`, an index on the owner, and a fixed constraint-naming convention); Alembic 1.20.1 with the hand-written baseline migration `0001` (`backend/migrations/`, `backend/alembic.ini` without any URL, the URL comes from `GAME_HOSTING_DATABASE_URL`); `app/infrastructure/db/repositories.py` (`SqlUserRepository`, `SqlPlanRepository`, `SqlGameServerRepository`, `SqlUnitOfWork`). Each `add` runs in a SAVEPOINT so a rejected insert does not poison the transaction; constraint violations become `AlreadyExistsError`, `UserNotFoundError`, `PlanNotFoundError` or `InvalidDataError` by constraint name; connection failures become `DatabaseUnavailableError`. The 28 repository contract tests pass against both the in-memory and the PostgreSQL implementation; migrations are verified up, down, repeated and idempotent, and models equal migrations. 354 default tests and 95 integration tests pass on Windows (Docker Desktop) and on Ubuntu 24.04 with Python 3.12; 15 mutations on the repositories, migration and models were detected. Verified by hand with the CLI on the Compose database: `alembic upgrade head` gives `0001 (head)`, `alembic check` reports no differences, and the password never appears in output. Not yet in place: no data is stored yet, and the API does not use the database (step 4).
 - [x] Step 4 — Connecting everything (2026-11-04). `ServerRegistry` resolves a platform UUID to its container through the database (closing the database transaction before any Docker call) and delegates to `ServerService`; `PlanCatalog` creates and lists plans; `app/composition.py` is the composition root shared by the API and the CLI. The API now addresses servers as `/servers/{server_id}` (UUID) and adds `GET /servers`; responses contain only `id`, `name`, `game` and `status` (never the container name or the owner); a database outage answers 503; `GAME_HOSTING_DATABASE_URL` is required at startup (fails closed, never echoed, redacted in the log) and the engine is released on shutdown. The CLI gained the operator administration commands `plans add/list` and `servers adopt/list` (new exit codes 6-9). 450 default tests and 105 integration tests pass on Windows (Docker Desktop) and on Ubuntu 24.04 with Python 3.12; 21 mutations were detected (two initially survived and their tests were strengthened). Verified without creating data on the real development stack: the API starts against `game-hosting-db`, answers 401 without a token, `[]` with it, 422 for an old container-name id and 404 for `/docs`, no secret appears in its log, and it refuses to start without the database URL. An integration test found that the default display name (the container name) exposed the internal name through the API; `--name` is therefore required when adopting. **Refinements of the agreed plan:** (1) the `game-hosting.server-id` container label is deferred to Phase 5, because a label can only be set when a container is created and the id is only known at adoption (the database already holds the mapping); (2) the administration CLI is an explicit bootstrap, to be replaced piece by piece by Phases 4, 5 and 7. Pending in this step: adopting the real `minecraft-dev` server into the database (the owner's e-mail is the user's choice).
+- [x] Real server adopted (2026-11-04). With the Compose stack up and the database at revision `0001`, `plans add` created the plan `dev` (4096 MB, 2000 millicores) and `servers adopt minecraft-dev` registered the real development server under the platform id shown by `cli.py servers list`, with the operator's account e-mail as owner (created) and the display name "Mundo de desarrollo". Repeating the adoption was rejected without duplicating (exit code 6). Through the API with a fresh token: `GET /servers` and `GET /servers/{id}` return the server as `running`, `POST .../start` is an idempotent no-op that leaves the running server untouched, `GET .../logs` returns the real log, no token gives 401, the old container-name address gives 422, no response contains the container name or the e-mail, and no secret appears in the API's log. Read-only and idempotent calls were used on purpose, so the running server was not disturbed.
+- [x] Step 5 — Closing checks (2026-11-04). The end-to-end HTTP tests, the Linux verification (Ubuntu 24.04, Python 3.12) and the documentation were completed as part of step 4; the Phase 3 definition of done was reviewed point by point against the evidence below.
 - [x] Give each platform server a stable internal ID separate from its runtime container name. (Modelled in step 2, exposed through the API in step 4: customers see only the UUID.)
 - [x] Introduce PostgreSQL and migrations (step 1: PostgreSQL service; step 3: Alembic baseline migration `0001`, applied to the development database on 2026-10-29 and reported by `alembic current` as `0001 (head)`).
 - [x] Define repository boundaries where they help keep application logic testable. (Step 2 interfaces; step 3 PostgreSQL implementation passing the same contract tests.)
@@ -147,6 +150,8 @@ Decisions (2026-10-29):
 - Server metadata can be persisted and retrieved.
 - The domain model does not use container names as permanent customer-facing IDs.
 - Schema changes are reproducible and tested.
+
+Definition-of-done evidence (2026-11-04): (1) *Server metadata can be persisted and retrieved*: 29 repository contract tests pass identically on the in-memory and the PostgreSQL implementations, and the real server round-trips through `servers adopt` and the API. (2) *The domain model does not use container names as permanent customer-facing IDs*: the customer-facing id is a UUID, the container name is internal, and tests assert that no API response contains it. (3) *Schema changes are reproducible and tested*: Alembic migration `0001` is verified up, down, repeated and idempotent on a fresh database, `alembic check` reports no difference between models and database, every CHECK, unique, foreign-key and RESTRICT rule is exercised against a real PostgreSQL, and all of it passes on Windows and on Ubuntu 24.04 (450 default and 105 integration tests).
 
 ### Phase 4 — Web control panel
 
@@ -211,9 +216,10 @@ Goal: progressively add the controls required for a real hosting business.
 
 ## Immediate Next Step
 
-1. Adopt the real `minecraft-dev` server into the database (needs the owner's e-mail, chosen by the user; a plan `dev` with 4096 MB and 2000 millicores was proposed): `plans add`, then `servers adopt minecraft-dev --owner ... --plan dev --name ...` (commands in `docs/RUNNING.md`). The development stack (Docker Desktop containers `minecraft-dev` and `game-hosting-db`) is up and the database is migrated to `0001`.
-2. Phase 3 step 5: closing checks (end-to-end HTTP test is already in place, Linux verification done for step 4), review of the Phase 3 definition of done, and documentation. Then decide the next phase: Phase 4 (web panel and authentication) or the two postponed decisions (dependency strategy; pinning the Minecraft image).
-3. Pending decisions carried over from earlier phases: the dependency strategy (full freeze versus direct dependencies plus a lock file), and pinning the Minecraft image before production.
+1. Decide what comes next. The roadmap order is Phase 4 (web panel and authentication), which is also what makes ownership enforceable: it introduces credentials, sessions and the first public-facing surface, so it needs an explicit plan and security decisions before any code (how users sign up and log in, whether to use an existing identity provider, how the panel and the API are served, and what happens to the shared operator token). Propose the plan first and wait for approval.
+2. Alternatively, settle the two postponed decisions first: the dependency strategy (full freeze versus direct dependencies plus a lock file) and pinning the Minecraft image and version before production.
+3. Carried-over technical debt, all documented in `docs/ARCHITECTURE.md`: no edit or delete operations for users, plans or servers; `GET /servers` needs Docker for live statuses; the `game-hosting.server-id` container label arrives with Phase 5 provisioning; the operator CLI is a bootstrap to be replaced by Phases 4, 5 and 7.
+
 
 ## Out of Scope for Now
 
