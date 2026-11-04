@@ -69,6 +69,9 @@ class _Plans:
     def find_by_slug(self, slug):
         return next((p for p in self._plans.values() if p.slug == slug), None)
 
+    def list_all(self):
+        return sorted(self._plans.values(), key=lambda plan: plan.slug)
+
 
 class _Servers:
     def __init__(self, servers, users, plans):

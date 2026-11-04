@@ -1,28 +1,36 @@
 """HTTP API.
 
-The API is a thin layer over ServerService: routes validate input, call the
-service and return its result. The service is injected by `create_app`, so the
-caller (production entry point or tests) decides which runtime is behind it.
+The API is a thin layer over ServerRegistry: routes validate input, call the
+registry and return its result. Servers are identified by their platform UUID;
+container names are internal and never appear in responses. The registry is
+injected by `create_app`, so the caller (production entry point or tests)
+decides what is behind it.
 
 Application errors become HTTP errors with generic bodies; the underlying
-detail (which may contain Docker messages or paths) is only logged.
+detail (which may contain Docker messages, paths or database details) is only
+logged.
 
 Every `/servers` route requires `Authorization: Bearer <token>`. This single
 shared token is a temporary guard (for example against hostile web pages
-reaching a localhost API), not user authentication. `/health` is open. The
-interactive docs are disabled unless explicitly enabled.
+reaching a localhost API), not user authentication: until users can
+authenticate (Phase 4) it acts as the operator and may act on every server.
+`/health` is open and never touches Docker or the database. The interactive
+docs are disabled unless explicitly enabled.
 """
 
 import logging
 import secrets
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
+from app.domain.models import Game
 from app.errors import (
+    DatabaseUnavailableError,
     GameHostingError,
     RuntimeUnavailableError,
     ServerNotFoundError,
@@ -36,17 +44,13 @@ from app.services.server_service import (
 
 logger = logging.getLogger("game_hosting.api")
 
-# Valid Docker container names, limited to 64 characters.
-SERVER_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
 MAX_LOG_TAIL = 1000
 MAX_STOP_TIMEOUT = 300
 MIN_TOKEN_LENGTH = 16
 
 _bearer = HTTPBearer(auto_error=False)
 
-ServerName = Annotated[
-    str, Path(pattern=SERVER_NAME_PATTERN, description="Server (container) name")
-]
+ServerId = Annotated[UUID, Path(description="Platform server id (UUID)")]
 StopTimeout = Annotated[
     int,
     Query(ge=1, le=MAX_STOP_TIMEOUT, description="Seconds to wait before Docker kills the server"),
@@ -56,16 +60,30 @@ LogTail = Annotated[
 ]
 
 
-class ServerStatusResponse(BaseModel):
-    server: str
+class ServerResponse(BaseModel):
+    """What the API shows about a server. Deliberately no container name and no
+    owner details."""
+
+    id: UUID
+    name: str
+    game: Game
     status: ServerStatus
 
 
-def get_service(request: Request):
-    return request.app.state.service
+def _to_response(registered):
+    return ServerResponse(
+        id=registered.server.id,
+        name=registered.server.name,
+        game=registered.server.game,
+        status=registered.status,
+    )
 
 
-Service = Annotated[object, Depends(get_service)]
+def get_registry(request: Request):
+    return request.app.state.registry
+
+
+Registry = Annotated[object, Depends(get_registry)]
 
 
 def require_token(expected_token):
@@ -109,6 +127,12 @@ def _register_error_handlers(app):
         logger.error("Server runtime unavailable: %s", exc)
         return _error_response(503, "The server runtime is unavailable.")
 
+    @app.exception_handler(DatabaseUnavailableError)
+    async def handle_database_unavailable(request, exc):
+        # The message holds a redacted URL and the driver's text, never a password.
+        logger.error("Database unavailable: %s", exc)
+        return _error_response(503, "The platform database is unavailable.")
+
     @app.exception_handler(ServerOperationError)
     async def handle_operation_failed(request, exc):
         logger.error("Server operation failed: %s", exc, exc_info=exc)
@@ -120,7 +144,7 @@ def _register_error_handlers(app):
         return _error_response(500, "The operation failed.")
 
 
-def create_app(service, api_token, enable_docs=False):
+def create_app(registry, api_token, enable_docs=False, lifespan=None):
     if not api_token or len(api_token) < MIN_TOKEN_LENGTH:
         raise ValueError(
             f"api_token must be at least {MIN_TOKEN_LENGTH} characters long"
@@ -130,42 +154,42 @@ def create_app(service, api_token, enable_docs=False):
         "redoc_url": None,
         "openapi_url": None,
     }
-    app = FastAPI(title="game_hosting API", **docs_urls)
-    app.state.service = service
+    app = FastAPI(title="game_hosting API", lifespan=lifespan, **docs_urls)
+    app.state.registry = registry
     _register_error_handlers(app)
     protected = [Depends(require_token(api_token))]
 
     @app.get("/health")
     def health():
-        # Liveness only: deliberately does not call Docker.
+        # Liveness only: deliberately touches neither Docker nor the database.
         return {"status": "ok"}
 
-    @app.get("/servers/{name}", response_model=ServerStatusResponse, dependencies=protected)
-    def get_status(name: ServerName, service: Service):
-        return ServerStatusResponse(server=name, status=service.get_server_status(name))
+    @app.get("/servers", response_model=list[ServerResponse], dependencies=protected)
+    def list_servers(registry: Registry):
+        return [_to_response(r) for r in registry.list_servers()]
 
-    @app.post("/servers/{name}/start", response_model=ServerStatusResponse, dependencies=protected)
-    def start(name: ServerName, service: Service):
-        return ServerStatusResponse(server=name, status=service.start_server(name))
+    @app.get("/servers/{server_id}", response_model=ServerResponse, dependencies=protected)
+    def get_server(server_id: ServerId, registry: Registry):
+        return _to_response(registry.get_server(server_id))
 
-    @app.post("/servers/{name}/stop", response_model=ServerStatusResponse, dependencies=protected)
+    @app.post("/servers/{server_id}/start", response_model=ServerResponse, dependencies=protected)
+    def start(server_id: ServerId, registry: Registry):
+        return _to_response(registry.start_server(server_id))
+
+    @app.post("/servers/{server_id}/stop", response_model=ServerResponse, dependencies=protected)
     def stop(
-        name: ServerName, service: Service, timeout: StopTimeout = DEFAULT_STOP_TIMEOUT
+        server_id: ServerId, registry: Registry, timeout: StopTimeout = DEFAULT_STOP_TIMEOUT
     ):
-        return ServerStatusResponse(
-            server=name, status=service.stop_server(name, timeout=timeout)
-        )
+        return _to_response(registry.stop_server(server_id, timeout=timeout))
 
-    @app.post("/servers/{name}/restart", response_model=ServerStatusResponse, dependencies=protected)
+    @app.post("/servers/{server_id}/restart", response_model=ServerResponse, dependencies=protected)
     def restart(
-        name: ServerName, service: Service, timeout: StopTimeout = DEFAULT_STOP_TIMEOUT
+        server_id: ServerId, registry: Registry, timeout: StopTimeout = DEFAULT_STOP_TIMEOUT
     ):
-        return ServerStatusResponse(
-            server=name, status=service.restart_server(name, timeout=timeout)
-        )
+        return _to_response(registry.restart_server(server_id, timeout=timeout))
 
-    @app.get("/servers/{name}/logs", response_class=PlainTextResponse, dependencies=protected)
-    def logs(name: ServerName, service: Service, tail: LogTail = DEFAULT_LOG_TAIL):
-        return service.get_server_logs(name, tail=tail)
+    @app.get("/servers/{server_id}/logs", response_class=PlainTextResponse, dependencies=protected)
+    def logs(server_id: ServerId, registry: Registry, tail: LogTail = DEFAULT_LOG_TAIL):
+        return registry.get_server_logs(server_id, tail=tail)
 
     return app

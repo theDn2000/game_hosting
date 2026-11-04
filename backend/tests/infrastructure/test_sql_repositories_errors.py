@@ -42,6 +42,7 @@ OPERATIONS = {
     "plans.add": lambda uow: uow.plans.add(PLAN),
     "plans.get": lambda uow: uow.plans.get(uuid.uuid4()),
     "plans.find_by_slug": lambda uow: uow.plans.find_by_slug("basic"),
+    "plans.list_all": lambda uow: uow.plans.list_all(),
     "servers.add": lambda uow: uow.servers.add(SERVER),
     "servers.get": lambda uow: uow.servers.get(uuid.uuid4()),
     "servers.find_by_container_name": lambda uow: uow.servers.find_by_container_name("x"),

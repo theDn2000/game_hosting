@@ -42,6 +42,9 @@ class PlanRepository(Protocol):
 
     def find_by_slug(self, slug: str) -> Plan | None: ...
 
+    def list_all(self) -> list[Plan]:
+        """Ordered by slug."""
+
 
 class GameServerRepository(Protocol):
     def add(self, server: GameServer) -> None:

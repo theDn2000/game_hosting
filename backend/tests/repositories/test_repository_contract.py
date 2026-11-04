@@ -371,3 +371,15 @@ def test_servers_of_other_owners_are_not_disturbed_by_a_failed_add(uow_factory, 
         uow.commit()  # committing after a rejected add must not lose or add anything
     with uow_factory() as uow:
         assert uow.servers.list_all() == [kept]
+
+
+def test_plans_are_listed_ordered_by_slug(uow_factory):
+    plans = [make_plan(slug) for slug in ("pro", "basic", "ultra", "a-first")]
+    with uow_factory() as uow:
+        assert uow.plans.list_all() == []
+        for plan in plans:
+            uow.plans.add(plan)
+        uow.commit()
+    with uow_factory() as uow:
+        assert [p.slug for p in uow.plans.list_all()] == ["a-first", "basic", "pro", "ultra"]
+        assert uow.plans.list_all() == sorted(plans, key=lambda p: p.slug)

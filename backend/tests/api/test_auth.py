@@ -6,21 +6,22 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from app.api.app import MIN_TOKEN_LENGTH, create_app, require_token
-from tests.api.test_servers import NAME, TOKEN, FakeService
+from tests.api.test_servers import SERVER_ID, TOKEN, FakeRegistry
 
 PROTECTED = [
-    ("get", f"/servers/{NAME}"),
-    ("post", f"/servers/{NAME}/start"),
-    ("post", f"/servers/{NAME}/stop"),
-    ("post", f"/servers/{NAME}/restart"),
-    ("get", f"/servers/{NAME}/logs"),
+    ("get", "/servers"),
+    ("get", f"/servers/{SERVER_ID}"),
+    ("post", f"/servers/{SERVER_ID}/start"),
+    ("post", f"/servers/{SERVER_ID}/stop"),
+    ("post", f"/servers/{SERVER_ID}/restart"),
+    ("get", f"/servers/{SERVER_ID}/logs"),
 ]
 
 
-def anonymous_client(service=None, **app_kwargs):
-    service = service or FakeService()
-    app = create_app(service, api_token=TOKEN, **app_kwargs)
-    return TestClient(app), service
+def anonymous_client(registry=None, **app_kwargs):
+    registry = registry or FakeRegistry()
+    app = create_app(registry, api_token=TOKEN, **app_kwargs)
+    return TestClient(app), registry
 
 
 @pytest.mark.parametrize("method, path", PROTECTED)
@@ -61,8 +62,8 @@ def test_health_is_open():
 
 def test_authentication_comes_before_validation():
     client, service = anonymous_client()
-    assert client.get("/servers/-bad-name").status_code == 401
-    assert client.post(f"/servers/{NAME}/stop?timeout=0").status_code == 401
+    assert client.get("/servers/not-a-uuid").status_code == 401
+    assert client.post(f"/servers/{SERVER_ID}/stop?timeout=0").status_code == 401
     assert service.calls == []
 
 
@@ -70,7 +71,7 @@ def test_rejected_requests_are_logged_without_the_token(caplog):
     client, _ = anonymous_client()
     sent = "Bearer wrong-token-0123456789abcdef"
     with caplog.at_level(logging.WARNING, logger="game_hosting.api"):
-        client.get(f"/servers/{NAME}", headers={"Authorization": sent})
+        client.get(f"/servers/{SERVER_ID}", headers={"Authorization": sent})
     assert len(caplog.records) == 1
     assert "wrong-token" not in caplog.records[0].getMessage()
 
@@ -100,11 +101,11 @@ def test_rejected_request_log_escapes_control_characters_in_the_path(caplog):
 @pytest.mark.parametrize("token", [None, "", "short", "x" * (MIN_TOKEN_LENGTH - 1)])
 def test_create_app_refuses_a_missing_or_short_token(token):
     with pytest.raises(ValueError):
-        create_app(FakeService(), api_token=token)
+        create_app(FakeRegistry(), api_token=token)
 
 
 def test_create_app_accepts_the_minimum_token_length():
-    create_app(FakeService(), api_token="x" * MIN_TOKEN_LENGTH)
+    create_app(FakeRegistry(), api_token="x" * MIN_TOKEN_LENGTH)
 
 
 @pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
@@ -121,5 +122,5 @@ def test_docs_can_be_enabled(path):
 
 def test_enabling_docs_does_not_unprotect_the_routes():
     client, service = anonymous_client(enable_docs=True)
-    assert client.post(f"/servers/{NAME}/stop").status_code == 401
+    assert client.post(f"/servers/{SERVER_ID}/stop").status_code == 401
     assert service.calls == []

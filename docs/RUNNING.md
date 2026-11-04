@@ -50,7 +50,7 @@ docker compose ps                # it should become "healthy"
 
 - It listens only on `127.0.0.1:5432`. It has no `game-hosting.managed` label on purpose, so the CLI and the API can never control it (`cli.py --server game-hosting-db status` reports `not_found`).
 - `docker compose down` keeps the data; **`docker compose down -v` deletes the `postgres-data` volume, that is, the whole database.**
-- The connection URL, used by the code that talks to the database, is `postgresql+psycopg://<user>:<password>@127.0.0.1:5432/<db>` and is read from the `GAME_HOSTING_DATABASE_URL` environment variable of the process that needs it. The API does not use the database yet (it will in Phase 3 step 4). Treat the URL as a secret, because it contains the password.
+- The connection URL, used by the API, the administration CLI and Alembic, is `postgresql+psycopg://<user>:<password>@127.0.0.1:5432/<db>` and is read from the `GAME_HOSTING_DATABASE_URL` environment variable of the process that needs it. Treat it as a secret, because it contains the password.
 
 ### Database migrations (Alembic)
 
@@ -74,7 +74,9 @@ $env:GAME_HOSTING_DATABASE_URL = "postgresql+psycopg://gamehosting:$pw@127.0.0.1
 
 ## 3. The CLI
 
-From `backend/` (it also works when called by path from elsewhere):
+From `backend/` (it also works when called by path from elsewhere). It has two parts.
+
+### Controlling a container by name (no database needed)
 
 ```powershell
 .\.venv\Scripts\python.exe cli.py status
@@ -85,69 +87,96 @@ From `backend/` (it also works when called by path from elsewhere):
 .\.venv\Scripts\python.exe cli.py --server other-name status
 ```
 
-Exit codes: 0 ok, 1 other application error, 2 invalid usage, 3 server not found, 4 Docker unavailable, 5 operation failed.
+This is a developer tool: it works on container names, and only on containers carrying the `game-hosting.managed=true` label.
+
+### Operator administration (needs `GAME_HOSTING_DATABASE_URL`)
+
+These commands register plans and servers in the database. They are a **bootstrap for the operator**: until users can sign up (Phase 4), servers are created automatically (Phase 5) and plans are managed with billing (Phase 7), this is how data gets in.
+
+```powershell
+.\.venv\Scripts\python.exe cli.py plans add --slug dev --name "Dev plan" --memory-mb 4096 --cpu-millicores 2000
+.\.venv\Scripts\python.exe cli.py plans list
+.\.venv\Scripts\python.exe cli.py servers adopt minecraft-dev --owner you@example.com --plan dev --name "My world"
+.\.venv\Scripts\python.exe cli.py servers list
+```
+
+- `servers adopt` registers an **existing, labelled container** as a platform server and prints its new platform `id`. The plan must exist; the owner is created if no user has that e-mail (the output says whether it was created or existing). `--name` is the display name customers see and is required on purpose: it must not default to the container name, which stays internal.
+- Everything is stored in one transaction: if any step fails, nothing is kept.
+- `servers list` is the operator view and shows the container name; the HTTP API never does.
+- Set the database URL as described under "Database migrations" (same variable). Apply the migrations first.
+
+Exit codes: 0 ok, 1 other application error, 2 invalid usage, 3 not found (server, plan or user), 4 Docker unavailable, 5 operation failed, 6 already exists, 7 database unavailable, 8 invalid data, 9 configuration (for example a missing database URL).
 
 ## 4. The HTTP API
+
+Servers are addressed by their **platform id** (a UUID), never by container name. Register a server first (section 3); `servers list` shows the ids.
 
 ### Configuration (environment variables)
 
 | Variable | Required | Meaning |
 |---|---|---|
 | `GAME_HOSTING_API_TOKEN` | yes | Shared secret, at least 16 characters. The API refuses to start without it. |
+| `GAME_HOSTING_DATABASE_URL` | yes | `postgresql+psycopg://user:password@host:port/dbname`. The API refuses to start without it (or with an unusable one). The database is only contacted when a request needs it. Treat it as a secret. |
 | `GAME_HOSTING_API_DOCS` | no | `1` or `true` enables `/docs`, `/redoc` and `/openapi.json`. Default: off. Do not enable in production. |
 | `GAME_HOSTING_LOG_LEVEL` | no | `DEBUG`, `INFO`, `WARNING` or `ERROR`. Default: `INFO`. |
 
 ### Generate a token and start the API
 
-From `backend/`:
+From `backend/`, with the database up and migrated, and the URL set as in "Database migrations":
 
 ```powershell
 $env:GAME_HOSTING_API_TOKEN = .\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
 .\.venv\Scripts\python.exe -m uvicorn --factory app.api.entrypoint:build_app --host 127.0.0.1
 ```
 
-The API listens on `http://127.0.0.1:8000`. Stop it with Ctrl+C. The variable exists only in that terminal window and disappears when it is closed. Never put the token in the repository, in a `.env` file that is committed, or in a chat; generate a new one whenever you doubt it.
+The API listens on `http://127.0.0.1:8000`. Stop it with Ctrl+C. The variables exist only in that terminal window and disappear when it is closed. Never put the token or the database URL in the repository, in a `.env` file that is committed, or in a chat; generate a new token whenever you doubt it.
 
 (Linux/macOS shell: `export GAME_HOSTING_API_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"`.)
 
+**Security reminder.** The token is a temporary shared secret that acts as the *operator*: it can act on every registered server. Ownership is stored but not enforced yet; per-customer access arrives with authentication (Phase 4). Keep the API bound to `127.0.0.1`.
+
 ### Calling it
 
-Every `/servers` route needs `Authorization: Bearer <token>`. `/health` does not.
+Every `/servers` route needs `Authorization: Bearer <token>`. `/health` does not. Use a server id from `cli.py servers list`:
 
 ```powershell
 $auth = @{ Authorization = "Bearer $env:GAME_HOSTING_API_TOKEN" }
+$id = "<the server id>"
 
 Invoke-RestMethod http://127.0.0.1:8000/health
-Invoke-RestMethod -Headers $auth http://127.0.0.1:8000/servers/minecraft-dev
-Invoke-RestMethod -Headers $auth -Method Post http://127.0.0.1:8000/servers/minecraft-dev/start
-Invoke-RestMethod -Headers $auth -Method Post "http://127.0.0.1:8000/servers/minecraft-dev/stop?timeout=30"
-Invoke-RestMethod -Headers $auth -Method Post "http://127.0.0.1:8000/servers/minecraft-dev/restart?timeout=30"
-Invoke-RestMethod -Headers $auth "http://127.0.0.1:8000/servers/minecraft-dev/logs?tail=50"
+Invoke-RestMethod -Headers $auth http://127.0.0.1:8000/servers
+Invoke-RestMethod -Headers $auth http://127.0.0.1:8000/servers/$id
+Invoke-RestMethod -Headers $auth -Method Post http://127.0.0.1:8000/servers/$id/start
+Invoke-RestMethod -Headers $auth -Method Post "http://127.0.0.1:8000/servers/$id/stop?timeout=30"
+Invoke-RestMethod -Headers $auth -Method Post "http://127.0.0.1:8000/servers/$id/restart?timeout=30"
+Invoke-RestMethod -Headers $auth "http://127.0.0.1:8000/servers/$id/logs?tail=50"
 ```
 
 With curl (use `curl.exe` in PowerShell, because `curl` is an alias of `Invoke-WebRequest`):
 
 ```powershell
-curl.exe -H "Authorization: Bearer $env:GAME_HOSTING_API_TOKEN" http://127.0.0.1:8000/servers/minecraft-dev
+curl.exe -H "Authorization: Bearer $env:GAME_HOSTING_API_TOKEN" http://127.0.0.1:8000/servers
 ```
 
 | Endpoint | Result |
 |---|---|
-| `GET /health` | `200 {"status":"ok"}` (never calls Docker) |
-| `GET /servers/{name}` | `200 {"server":..., "status":...}`; a missing server gives status `not_found` |
-| `POST /servers/{name}/start` | `200` with the final status (idempotent) |
-| `POST /servers/{name}/stop?timeout=` | `200` with the final status (idempotent; `timeout` 1-300, default 30) |
-| `POST /servers/{name}/restart?timeout=` | `200` with the final status |
-| `GET /servers/{name}/logs?tail=` | `200` plain text (`tail` 1-1000, default 100) |
+| `GET /health` | `200 {"status":"ok"}` (touches neither Docker nor the database) |
+| `GET /servers` | `200` list of `{"id","name","game","status"}`, oldest first (needs Docker for the statuses) |
+| `GET /servers/{id}` | `200` one server; a registered server whose container is gone has status `not_found` |
+| `POST /servers/{id}/start` | `200` with the final status (idempotent) |
+| `POST /servers/{id}/stop?timeout=` | `200` with the final status (idempotent; `timeout` 1-300, default 30) |
+| `POST /servers/{id}/restart?timeout=` | `200` with the final status |
+| `GET /servers/{id}/logs?tail=` | `200` plain text (`tail` 1-1000, default 100) |
 
-Errors: 401 missing/wrong token, 404 server not found (or not managed), 422 invalid input, 503 Docker unavailable, 500 operation failed. Error bodies are generic; the detail is in the API's log.
+Responses never contain the container name or the owner's details. Errors: 401 missing/wrong token, 404 unknown server (or its container is gone), 422 invalid input (including an id that is not a UUID, such as an old container name), 503 Docker or the database unavailable, 500 operation failed. Error bodies are generic; the detail is in the API's log.
 
 ### Troubleshooting
 
-- **The process exits immediately with `ConfigurationError`:** `GAME_HOSTING_API_TOKEN` is missing or shorter than 16 characters (or `GAME_HOSTING_LOG_LEVEL` is invalid). The message says which.
+- **The process exits immediately with `ConfigurationError`:** `GAME_HOSTING_API_TOKEN` or `GAME_HOSTING_DATABASE_URL` is missing, too short or unusable (or `GAME_HOSTING_LOG_LEVEL` is invalid). The message says which and never shows secrets.
 - **401:** the `Authorization: Bearer ...` header is missing or the token differs from the one the API was started with. A new terminal does not inherit a variable set in another one.
-- **404 on a container that exists:** it lacks the `game-hosting.managed=true` label. Recreate it with `docker compose up -d`.
-- **503:** Docker is not running or not reachable.
+- **404 on a server you registered:** its container no longer exists or lost the `game-hosting.managed=true` label (recreate it with `docker compose up -d`).
+- **422 on `/servers/minecraft-dev`:** servers are addressed by UUID now; take the id from `cli.py servers list`.
+- **503 "database is unavailable":** PostgreSQL is not running or the URL is wrong; run `docker compose up -d postgres`. **503 "runtime is unavailable":** Docker is not running.
 - **Port already in use:** add `--port 8001` to the uvicorn command.
 
 ## 5. Tests
@@ -159,4 +188,4 @@ From `backend/`:
 .\.venv\Scripts\python.exe -m pytest -m integration  # needs a running Docker Engine
 ```
 
-The integration tests create throwaway `alpine:3` containers named `game-hosting-it-<id>` (the image is pulled on first use), start a real API process on a free port, and remove everything afterwards. They never touch `minecraft-dev` or `./data`.
+The integration tests create throwaway containers (`alpine:3` named `game-hosting-it-<id>`, and a `postgres:18` with a random password; images are pulled on first use), start real API and CLI processes, and remove everything afterwards. They never touch `minecraft-dev`, `game-hosting-db` or `./data`.

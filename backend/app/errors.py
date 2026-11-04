@@ -10,6 +10,15 @@ class GameHostingError(Exception):
     """Base class for all application-level errors."""
 
 
+class ConfigurationError(Exception):
+    """An entry point is not configured safely enough to start.
+
+    Deliberately not a GameHostingError: it concerns how a process is set up,
+    not an operation requested by a user, and it is raised before any service
+    exists.
+    """
+
+
 class ServerNotFoundError(GameHostingError):
     """The requested server does not exist."""
 

@@ -161,6 +161,11 @@ class SqlPlanRepository(_SqlRepository):
             ).scalar_one_or_none()
         return _to_plan(row) if row else None
 
+    def list_all(self):
+        with self._database_errors():
+            rows = self._session.execute(select(PlanRow).order_by(PlanRow.slug)).scalars()
+            return [_to_plan(row) for row in rows]
+
 
 class SqlGameServerRepository(_SqlRepository):
     def add(self, server):
