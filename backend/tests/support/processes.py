@@ -79,12 +79,14 @@ def api_process(log_path, database_url, token=None):
                 process.kill()
 
 
-def run_cli(database_url, *args):
-    """Run `cli.py` as a subprocess with the database URL in its environment."""
+def run_cli(database_url, *args, input=None):
+    """Run `cli.py` as a subprocess with the database URL in its environment.
+    `input` is written to its standard input (for example a password)."""
     return subprocess.run(
         [sys.executable, "cli.py", *args],
         cwd=BACKEND_DIR,
         env=_environment(database_url),
+        input=input,
         capture_output=True,
         text=True,
         timeout=120,

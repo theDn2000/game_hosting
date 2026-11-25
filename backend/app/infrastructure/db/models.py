@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -23,6 +24,7 @@ from sqlalchemy import (
     MetaData,
     Text,
     UniqueConstraint,
+    true,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -30,6 +32,7 @@ from app.domain.models import (
     MAX_CPU_MILLICORES,
     MAX_EMAIL_LENGTH,
     MAX_MEMORY_MB,
+    MAX_PASSWORD_HASH_LENGTH,
     MAX_PLAN_NAME_LENGTH,
     MAX_SERVER_NAME_LENGTH,
 )
@@ -57,12 +60,20 @@ class UserRow(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    role: Mapped[str] = mapped_column(Text, server_default="user")
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default=true())
 
     __table_args__ = (
         UniqueConstraint("email"),
         CheckConstraint("email = lower(email)", name="email_lowercase"),
         CheckConstraint(
             f"char_length(email) BETWEEN 3 AND {MAX_EMAIL_LENGTH}", name="email_length"
+        ),
+        CheckConstraint("role IN ('user', 'admin')", name="role_valid"),
+        CheckConstraint(
+            f"password_hash IS NULL OR char_length(password_hash) BETWEEN 1 AND {MAX_PASSWORD_HASH_LENGTH}",
+            name="password_hash_valid",
         ),
     )
 

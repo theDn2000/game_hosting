@@ -105,6 +105,31 @@ These commands register plans and servers in the database. They are a **bootstra
 - `servers list` is the operator view and shows the container name; the HTTP API never does.
 - Set the database URL as described under "Database migrations" (same variable). Apply the migrations first.
 
+### Accounts (`users`)
+
+Each customer will have their own account. For now the operator creates them (open sign-up arrives with billing, Phase 7). Passwords are **never** given as command-line arguments, because they would be stored in the shell history and visible in the process list. The CLI asks for the password with a hidden prompt (twice) or, for scripts, reads one line from standard input.
+
+```powershell
+# Interactive: a hidden prompt asks for the password twice (nothing is echoed)
+.\.venv\Scripts\python.exe cli.py users add --email ana@example.com
+.\.venv\Scripts\python.exe cli.py users add --email boss@example.com --role admin
+
+# Create it without a password and set one afterwards (it cannot sign in until then)
+.\.venv\Scripts\python.exe cli.py users add --email ana@example.com --no-password
+.\.venv\Scripts\python.exe cli.py users set-password --email ana@example.com
+
+.\.venv\Scripts\python.exe cli.py users set-role --email ana@example.com --role admin
+.\.venv\Scripts\python.exe cli.py users disable --email ana@example.com
+.\.venv\Scripts\python.exe cli.py users enable --email ana@example.com
+.\.venv\Scripts\python.exe cli.py users list
+```
+
+- Password rules: 12 to 128 characters, any printable character (spaces and accents are fine), no complexity rules. A long passphrase is better than a short "complex" one. The password is stored only as an Argon2id hash; no command ever prints a password or a hash.
+- `--password-stdin` reads the first line of standard input, for example `Get-Content secret.txt | python cli.py users set-password --email ana@example.com --password-stdin`. Do not keep the password in a file you do not delete afterwards.
+- There are two roles: `user` (sees and operates only their own servers, enforced from step 4A.3) and `admin` (all servers). **The `admin` role can only be granted from this CLI.**
+- An account created by adopting a container (`servers adopt`) has no password and cannot sign in until you set one.
+- Signing in through the API and the panel arrives in steps 4A.2 and 4A.4; until then these accounts exist but nothing authenticates with them.
+
 Exit codes: 0 ok, 1 other application error, 2 invalid usage, 3 not found (server, plan or user), 4 Docker unavailable, 5 operation failed, 6 already exists, 7 database unavailable, 8 invalid data, 9 configuration (for example a missing database URL).
 
 ## 4. The HTTP API

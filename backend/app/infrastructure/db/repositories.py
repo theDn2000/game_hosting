@@ -16,10 +16,10 @@ in-memory reference implementation.
 
 from contextlib import contextmanager
 
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, update
 from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
 
-from app.domain.models import Game, GameServer, Plan, User, normalize_email
+from app.domain.models import Game, GameServer, Plan, Role, User, normalize_email
 from app.errors import (
     AlreadyExistsError,
     InvalidDataError,
@@ -63,7 +63,18 @@ def _translate_integrity_error(exc, owner_id=None, plan_id=None):
 
 
 def _to_user(row):
-    return User(id=row.id, email=row.email, created_at=row.created_at)
+    try:
+        role = Role(row.role)
+    except ValueError:
+        raise InvalidDataError(f"Stored user {row.id} has an unknown role.") from None
+    return User(
+        id=row.id,
+        email=row.email,
+        created_at=row.created_at,
+        role=role,
+        password_hash=row.password_hash,
+        is_active=row.is_active,
+    )
 
 
 def _to_plan(row):
@@ -101,23 +112,54 @@ class _SqlRepository:
         with translate_connection_errors(self._session.get_bind()):
             yield
 
-    def _insert(self, table_row, values, owner_id=None, plan_id=None):
+    def _write(self, statement, owner_id=None, plan_id=None):
+        """Run an INSERT or UPDATE in a SAVEPOINT, translating constraint errors."""
         with self._database_errors():
             try:
                 with self._session.begin_nested():
-                    self._session.execute(insert(table_row).values(**values))
+                    return self._session.execute(statement)
             except IntegrityError as exc:
                 translated = _translate_integrity_error(exc, owner_id, plan_id)
                 if translated is None:
                     raise
                 raise translated from exc
 
+    def _insert(self, table_row, values, owner_id=None, plan_id=None):
+        self._write(insert(table_row).values(**values), owner_id, plan_id)
+
 
 class SqlUserRepository(_SqlRepository):
     def add(self, user):
         self._insert(
-            UserRow, dict(id=user.id, email=user.email, created_at=user.created_at)
+            UserRow,
+            dict(
+                id=user.id,
+                email=user.email,
+                created_at=user.created_at,
+                role=user.role.value,
+                password_hash=user.password_hash,
+                is_active=user.is_active,
+            ),
         )
+
+    def update(self, user):
+        result = self._write(
+            update(UserRow)
+            .where(UserRow.id == user.id)
+            .values(
+                email=user.email,
+                role=user.role.value,
+                password_hash=user.password_hash,
+                is_active=user.is_active,
+            )
+        )
+        if result.rowcount == 0:
+            raise UserNotFoundError(user.id)
+
+    def list_all(self):
+        with self._database_errors():
+            rows = self._session.execute(select(UserRow).order_by(UserRow.email)).scalars()
+            return [_to_user(row) for row in rows]
 
     def get(self, user_id):
         with self._database_errors():

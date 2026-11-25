@@ -48,6 +48,16 @@ class _Users:
         email = normalize_email(email)
         return next((u for u in self._users.values() if u.email == email), None)
 
+    def update(self, user):
+        if user.id not in self._users:
+            raise UserNotFoundError(user.id)
+        if any(u.email == user.email and u.id != user.id for u in self._users.values()):
+            raise AlreadyExistsError("user", "email")
+        self._users[user.id] = user
+
+    def list_all(self):
+        return sorted(self._users.values(), key=lambda user: user.email)
+
 
 class _Plans:
     def __init__(self, plans):

@@ -172,7 +172,7 @@ Cross-cutting requirements recorded from the user (2026-11-25), now also permane
 - **Always scalable:** stateless API processes (sessions and login throttling live in PostgreSQL, not in memory), paginated list endpoints with a maximum page size, Docker statuses fetched in bulk instead of one call per server, and infrastructure behind interfaces.
 
 Plan (one commit per step, with a report):
-- [ ] 4A.1 — Account data and passwords: migration `0002` (role, password hash, active flag on users), `Role`, `PasswordHasher` port with an Argon2id adapter, password policy, `UserAccounts` service and operator commands `users add/list/set-password/set-role/disable/enable`.
+- [x] 4A.1 — Account data and passwords (2026-11-25): migration `0002` (`users.role`, `users.password_hash`, `users.is_active`, safe defaults and CHECK constraints), `Role`, the self-validating `User` with the hash kept out of `repr`, the password policy (12-128 characters, NFKC-normalised, no composition rules), the `PasswordHasher` port with an Argon2id adapter (`argon2-cffi 25.1.0`, about 50 ms per hash), `UserAccounts` (validates before hashing and hashes outside any transaction), `UserRepository.update` and `list_all` on both implementations, and the operator commands `users add/set-password/set-role/disable/enable/list` (hidden prompt or `--password-stdin`; no password option exists). 588 default and 137 integration tests pass on Windows and on Ubuntu 24.04 with Python 3.12; 23 mutations detected (including a default role of `admin` in the migration, a hash leaking through `repr` or the user listing, a skipped password policy, hashing inside a transaction and missing commits). Migration `0002` was applied to the development database after a backup (`0001` -> `0002 (head)`, `alembic check` clean, all data intact), and the operator account was promoted to `admin`; it still has no password, which the user sets with the hidden prompt (the sign-in endpoint comes in 4A.4). New dependencies: `argon2-cffi 25.1.0`, `argon2-cffi-bindings 26.2.0`, `cffi 2.1.1`, `pycparser 3.12`.
 - [ ] 4A.2 — `AuthService`: login, logout, session validation, DB-backed login throttling; migration `0003` (sessions, login attempts).
 - [ ] 4A.3 — Authorization in the registry with an `Actor`, a paginated list with bulk Docker statuses, and an ownership test matrix covering every route and operation.
 - [ ] 4A.4 — API: `/api` prefix, `/api/auth/login|logout|me`, cookie and CSRF protection, removal of the shared token, machine-readable error codes, pagination.
@@ -240,10 +240,11 @@ Goal: progressively add the controls required for a real hosting business.
 
 ## Immediate Next Step
 
-1. Phase 4A.1 — account data and passwords (see the Phase 4 plan): migration `0002`, `Role`, the password hasher and policy, the `UserAccounts` service and the operator `users` commands.
-2. Then 4A.2 to 4A.5 (sessions, authorization with an `Actor`, the `/api` rework, security review), and a stop for the user's review before the panel (4B).
-3. Pending decisions carried over from earlier phases: the dependency strategy and pinning the Minecraft image and version before production.
-4. Carried-over technical debt, all documented in `docs/ARCHITECTURE.md`: no edit or delete operations for users, plans or servers; `GET /servers` needs Docker for live statuses (reworked in 4A.3); the `game-hosting.server-id` container label arrives with Phase 5 provisioning; the operator CLI is a bootstrap to be replaced by Phases 4, 5 and 7.
+1. The user sets a password for the operator account with the hidden prompt (`python cli.py users set-password --email <your e-mail>`); it is only needed once sign-in exists.
+2. Phase 4A.2 — `AuthService`: sign-in, sign-out and session validation with server-side sessions (only a hash of the token stored), idle and absolute expiry, and database-backed login throttling per account and per IP (stateless API processes); migration `0003`.
+3. Then 4A.3 to 4A.5 (authorization with an `Actor`, the `/api` rework, security review), and a stop for the user's review before the panel (4B).
+4. Pending decisions carried over from earlier phases: the dependency strategy and pinning the Minecraft image and version before production.
+5. Carried-over technical debt, all documented in `docs/ARCHITECTURE.md`: no edit or delete operations for users, plans or servers; `GET /servers` needs Docker for live statuses (reworked in 4A.3); the `game-hosting.server-id` container label arrives with Phase 5 provisioning; the operator CLI is a bootstrap to be replaced by Phases 4, 5 and 7.
 
 
 ## Out of Scope for Now

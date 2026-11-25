@@ -9,12 +9,14 @@ from dataclasses import dataclass
 
 from sqlalchemy.engine import Engine
 
+from app.infrastructure.argon2_hasher import Argon2PasswordHasher
 from app.infrastructure.db.database import create_database_engine, create_session_factory
 from app.infrastructure.db.repositories import SqlUnitOfWork
 from app.infrastructure.docker_client import DockerClient
 from app.services.plan_catalog import PlanCatalog
 from app.services.server_registry import ServerRegistry
 from app.services.server_service import ServerService
+from app.services.user_accounts import UserAccounts
 
 
 @dataclass(frozen=True)
@@ -22,6 +24,7 @@ class Services:
     engine: Engine
     registry: ServerRegistry
     plans: PlanCatalog
+    accounts: UserAccounts
 
     def close(self):
         """Release the database connections."""
@@ -43,4 +46,5 @@ def build_services(database_url, docker_client=None):
         engine=engine,
         registry=ServerRegistry(uow_factory, server_service),
         plans=PlanCatalog(uow_factory),
+        accounts=UserAccounts(uow_factory, Argon2PasswordHasher()),
     )

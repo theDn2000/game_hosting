@@ -32,6 +32,14 @@ class UserRepository(Protocol):
     def find_by_email(self, email: str) -> User | None:
         """The e-mail is normalised (trimmed, lowercased) before searching."""
 
+    def update(self, user: User) -> None:
+        """Replace the stored e-mail, role, password hash and active flag of the
+        user with this id. Raises UserNotFoundError if there is none and
+        AlreadyExistsError if the new e-mail belongs to another user."""
+
+    def list_all(self) -> list[User]:
+        """Ordered by e-mail."""
+
 
 class PlanRepository(Protocol):
     def add(self, plan: Plan) -> None:

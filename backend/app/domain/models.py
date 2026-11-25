@@ -14,13 +14,15 @@ customer-facing identifier.
 import re
 import unicodedata
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from enum import StrEnum
 
 from app.errors import InvalidDataError
 
 MAX_EMAIL_LENGTH = 254
+MAX_PASSWORD_HASH_LENGTH = 255
 MAX_PLAN_NAME_LENGTH = 100
 MAX_SERVER_NAME_LENGTH = 64
 MAX_MEMORY_MB = 1_048_576  # 1 TiB
@@ -34,6 +36,13 @@ _CONTAINER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 class Game(StrEnum):
     MINECRAFT_JAVA = "minecraft-java"
+
+
+class Role(StrEnum):
+    """What an account may do. `admin` is only ever granted from the operator CLI."""
+
+    USER = "user"
+    ADMIN = "admin"
 
 
 def normalize_email(email):
@@ -70,13 +79,34 @@ def _require_int_in_range(value, field, maximum):
         raise InvalidDataError(f"{field} must be a whole number between 1 and {maximum}.")
 
 
+def _require_password_hash(value):
+    """A stored hash is an opaque printable-ASCII string (for Argon2, a PHC string)."""
+    if value is None:
+        return
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= MAX_PASSWORD_HASH_LENGTH
+        or not all(33 <= ord(char) < 127 for char in value)
+    ):
+        raise InvalidDataError("password_hash must be an opaque printable string or None.")
+
+
 @dataclass(frozen=True, slots=True)
 class User:
-    """A customer identity. Credentials are deliberately absent (Phase 4)."""
+    """A customer or operator account.
+
+    `password_hash` is the output of a password hasher, never a password. It is
+    left out of `repr` so that logging a user cannot leak it, and `None` means
+    the account cannot sign in (yet). Instances are immutable: use the `with_*`
+    methods to obtain a changed copy.
+    """
 
     id: uuid.UUID
     email: str
     created_at: datetime
+    role: Role = Role.USER
+    password_hash: str | None = dataclass_field(default=None, repr=False)
+    is_active: bool = True
 
     def __post_init__(self):
         _require_uuid(self.id, "id")
@@ -88,14 +118,34 @@ class User:
             or not _EMAIL_PATTERN.match(self.email)
         ):
             raise InvalidDataError("email must be a valid, lowercase e-mail address.")
+        if not isinstance(self.role, Role):
+            raise InvalidDataError("role must be a valid role.")
+        _require_password_hash(self.password_hash)
+        if not isinstance(self.is_active, bool):
+            raise InvalidDataError("is_active must be a boolean.")
+
+    @property
+    def can_sign_in(self):
+        """An active account with a password."""
+        return self.is_active and self.password_hash is not None
 
     @classmethod
-    def new(cls, email, created_at=None):
+    def new(cls, email, created_at=None, role=Role.USER):
         return cls(
             id=uuid.uuid4(),
             email=normalize_email(email) if isinstance(email, str) else email,
             created_at=created_at or _utc_now(),
+            role=role,
         )
+
+    def with_password_hash(self, password_hash):
+        return replace(self, password_hash=password_hash)
+
+    def with_role(self, role):
+        return replace(self, role=role)
+
+    def with_active(self, is_active):
+        return replace(self, is_active=is_active)
 
 
 @dataclass(frozen=True, slots=True)

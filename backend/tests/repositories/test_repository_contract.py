@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 from sqlalchemy import text
 
-from app.domain.models import GameServer, Plan, User
+from app.domain.models import GameServer, Plan, Role, User
 from app.errors import (
     AlreadyExistsError,
     PlanNotFoundError,
@@ -383,3 +383,123 @@ def test_plans_are_listed_ordered_by_slug(uow_factory):
     with uow_factory() as uow:
         assert [p.slug for p in uow.plans.list_all()] == ["a-first", "basic", "pro", "ultra"]
         assert uow.plans.list_all() == sorted(plans, key=lambda p: p.slug)
+
+
+# --- user accounts (Phase 4A.1) ------------------------------------------------------
+
+ARGON2_STYLE_HASH = "$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$aGFzaGhhc2hoYXNo"
+
+
+def test_account_fields_round_trip(uow_factory):
+    user = User.new("boss@example.com", created_at=T0, role=Role.ADMIN).with_password_hash(
+        ARGON2_STYLE_HASH
+    ).with_active(False)
+    with uow_factory() as uow:
+        uow.users.add(user)
+        uow.commit()
+    with uow_factory() as uow:
+        stored = uow.users.get(user.id)
+        assert stored == user
+        assert (stored.role, stored.password_hash, stored.is_active) == (
+            Role.ADMIN, ARGON2_STYLE_HASH, False,
+        )
+        assert uow.users.find_by_email("boss@example.com") == user
+
+
+def test_a_user_without_a_password_round_trips_as_none(uow_factory):
+    user = make_user()
+    with uow_factory() as uow:
+        uow.users.add(user)
+        uow.commit()
+    with uow_factory() as uow:
+        assert uow.users.get(user.id).password_hash is None
+
+
+def test_update_changes_the_mutable_fields_and_keeps_the_rest(uow_factory):
+    user = make_user("ana@example.com")
+    with uow_factory() as uow:
+        uow.users.add(user)
+        uow.commit()
+    changed = user.with_password_hash(ARGON2_STYLE_HASH).with_role(Role.ADMIN).with_active(False)
+    with uow_factory() as uow:
+        uow.users.update(changed)
+        uow.commit()
+    with uow_factory() as uow:
+        stored = uow.users.get(user.id)
+        assert stored == changed
+        assert stored.created_at == user.created_at and stored.id == user.id
+        assert uow.users.find_by_email("ana@example.com") == changed
+
+
+def test_update_can_change_the_email(uow_factory):
+    user = make_user("old@example.com")
+    with uow_factory() as uow:
+        uow.users.add(user)
+        uow.commit()
+    renamed = User(
+        id=user.id, email="new@example.com", created_at=user.created_at
+    )
+    with uow_factory() as uow:
+        uow.users.update(renamed)
+        uow.commit()
+    with uow_factory() as uow:
+        assert uow.users.find_by_email("old@example.com") is None
+        assert uow.users.find_by_email("new@example.com") == renamed
+
+
+def test_update_of_a_missing_user_raises(uow_factory):
+    with uow_factory() as uow:
+        with pytest.raises(UserNotFoundError):
+            uow.users.update(make_user())
+
+
+def test_update_to_an_email_that_belongs_to_another_user_is_rejected(uow_factory):
+    first, second = make_user("first@example.com"), make_user("second@example.com")
+    with uow_factory() as uow:
+        uow.users.add(first)
+        uow.users.add(second)
+        uow.commit()
+    with uow_factory() as uow:
+        with pytest.raises(AlreadyExistsError) as excinfo:
+            uow.users.update(User(id=second.id, email="first@example.com", created_at=T0))
+    assert excinfo.value.field == "email"
+    with uow_factory() as uow:
+        assert uow.users.get(second.id).email == "second@example.com"
+
+
+def test_an_update_that_is_not_committed_is_discarded(uow_factory):
+    user = make_user()
+    with uow_factory() as uow:
+        uow.users.add(user)
+        uow.commit()
+    with uow_factory() as uow:
+        uow.users.update(user.with_role(Role.ADMIN))
+        assert uow.users.get(user.id).role is Role.ADMIN  # visible inside the unit
+    with uow_factory() as uow:
+        assert uow.users.get(user.id).role is Role.USER
+
+
+def test_a_rejected_update_does_not_poison_the_unit(uow_factory):
+    first, second = make_user("first@example.com"), make_user("second@example.com")
+    with uow_factory() as uow:
+        uow.users.add(first)
+        uow.users.add(second)
+        uow.commit()
+    with uow_factory() as uow:
+        with pytest.raises(AlreadyExistsError):
+            uow.users.update(User(id=second.id, email="first@example.com", created_at=T0))
+        uow.users.update(first.with_role(Role.ADMIN))  # the unit is still usable
+        uow.commit()
+    with uow_factory() as uow:
+        assert uow.users.get(first.id).role is Role.ADMIN
+
+
+def test_users_are_listed_ordered_by_email(uow_factory):
+    emails = ["zoe@example.com", "ana@example.com", "mike@example.com"]
+    with uow_factory() as uow:
+        assert uow.users.list_all() == []
+        for email in emails:
+            uow.users.add(make_user(email))
+        uow.commit()
+    with uow_factory() as uow:
+        assert [u.email for u in uow.users.list_all()] == sorted(emails)

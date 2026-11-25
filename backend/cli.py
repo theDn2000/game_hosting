@@ -10,11 +10,22 @@ Usage (from the backend/ directory):
     python cli.py plans list
     python cli.py servers adopt CONTAINER --owner EMAIL --plan SLUG --name NAME
     python cli.py servers list
+    python cli.py users add --email EMAIL [--role user|admin] [--no-password | --password-stdin]
+    python cli.py users set-password --email EMAIL [--password-stdin]
+    python cli.py users set-role --email EMAIL --role user|admin
+    python cli.py users disable --email EMAIL
+    python cli.py users enable --email EMAIL
+    python cli.py users list
 
 This is a thin layer over the application services: it parses arguments,
 calls them, and turns application errors into messages and exit codes. The
-administration commands are a bootstrap for the operator until users, server
+administration commands are a bootstrap for the operator until sign-up, server
 creation and plan management exist as proper features (Phases 4, 5 and 7).
+
+Passwords are never accepted as command-line arguments (they would end up in the
+shell history and the process list). They are read from a hidden prompt, asked
+twice, or from standard input with --password-stdin. The `admin` role can only
+be granted from here.
 
 Exit codes: 0 ok, 1 other application error, 2 invalid usage (argparse),
 3 not found (server, plan or user), 4 Docker unavailable, 5 operation failed,
@@ -22,10 +33,12 @@ Exit codes: 0 ok, 1 other application error, 2 invalid usage (argparse),
 """
 
 import argparse
+import getpass
 import os
 import sys
 
 from app.composition import build_services
+from app.domain.models import Role
 from app.errors import (
     AlreadyExistsError,
     ConfigurationError,
@@ -72,7 +85,7 @@ _EXIT_CODES = (
 )
 
 CONTAINER_COMMANDS = ("status", "start", "stop", "restart", "logs")
-ADMIN_COMMANDS = ("plans", "servers")
+ADMIN_COMMANDS = ("plans", "servers", "users")
 
 
 def _positive_int(value):
@@ -142,6 +155,39 @@ def build_parser():
         "--name", required=True, help="display name shown to customers (not the container name)"
     )
     server_actions.add_parser("list", help="list registered servers")
+
+    users = commands.add_parser(
+        "users", help=f"manage user accounts (needs {DATABASE_URL_VARIABLE})"
+    )
+    user_actions = users.add_subparsers(dest="action", required=True)
+    roles = [role.value for role in Role]
+
+    add_user = user_actions.add_parser("add", help="create an account")
+    add_user.add_argument("--email", required=True)
+    add_user.add_argument("--role", choices=roles, default=Role.USER.value)
+    add_user_password = add_user.add_mutually_exclusive_group()
+    add_user_password.add_argument(
+        "--no-password", action="store_true", help="create it without a password (it cannot sign in yet)"
+    )
+    add_user_password.add_argument(
+        "--password-stdin", action="store_true", help="read the password from standard input"
+    )
+
+    set_password = user_actions.add_parser("set-password", help="set or replace a password")
+    set_password.add_argument("--email", required=True)
+    set_password.add_argument(
+        "--password-stdin", action="store_true", help="read the password from standard input"
+    )
+
+    set_role = user_actions.add_parser("set-role", help="change an account's role")
+    set_role.add_argument("--email", required=True)
+    set_role.add_argument("--role", choices=roles, required=True)
+
+    for action, help_text in (("disable", "block an account from signing in"), ("enable", "unblock an account")):
+        toggle = user_actions.add_parser(action, help=help_text)
+        toggle.add_argument("--email", required=True)
+
+    user_actions.add_parser("list", help="list accounts")
     return parser
 
 
@@ -212,6 +258,62 @@ def _run_servers_command(args, admin):
     print(table or "(no servers)")
 
 
+def _yes_no(value):
+    return "yes" if value else "no"
+
+
+def _read_password(args):
+    """The new password: from standard input or from a hidden prompt (asked twice)."""
+    if args.password_stdin:
+        line = sys.stdin.readline()
+        if not line:
+            raise InvalidDataError("No password was provided on standard input.")
+        return line.rstrip("\r\n")
+    first = getpass.getpass("Password: ")
+    second = getpass.getpass("Repeat the password: ")
+    if first != second:
+        raise InvalidDataError("The passwords do not match.")
+    return first
+
+
+def _describe_user(user):
+    print(f"email: {user.email}")
+    print(f"id: {user.id}")
+    print(f"role: {user.role}")
+    print(f"active: {_yes_no(user.is_active)}")
+    print(f"can sign in: {_yes_no(user.can_sign_in)}")
+
+
+def _run_users_command(args, admin, read_password):
+    accounts = admin.accounts
+    if args.action == "add":
+        password = None
+        if not args.no_password:
+            password = read_password(args)
+        user = accounts.create_user(args.email, role=Role(args.role), password=password)
+        print(f"User '{user.email}' created.")
+        _describe_user(user)
+    elif args.action == "set-password":
+        user = accounts.set_password(args.email, read_password(args))
+        print(f"Password updated for '{user.email}'.")
+        _describe_user(user)
+    elif args.action == "set-role":
+        user = accounts.set_role(args.email, Role(args.role))
+        print(f"Role of '{user.email}' is now {user.role}.")
+    elif args.action in ("disable", "enable"):
+        user = accounts.set_active(args.email, args.action == "enable")
+        print(f"Account '{user.email}' is now {'active' if user.is_active else 'disabled'}.")
+    else:  # list
+        table = _table(
+            ("EMAIL", "ROLE", "ACTIVE", "PASSWORD", "ID"),
+            [
+                (u.email, u.role, _yes_no(u.is_active), "set" if u.password_hash else "not set", u.id)
+                for u in accounts.list_users()
+            ],
+        )
+        print(table or "(no users)")
+
+
 def build_service():
     return ServerService(DockerClient())
 
@@ -231,15 +333,19 @@ def build_admin():
         raise ConfigurationError(f"{DATABASE_URL_VARIABLE} is not usable: {error}") from None
 
 
-def main(argv=None, service=None, admin=None):
+def main(argv=None, service=None, admin=None, read_password=None):
     args = build_parser().parse_args(argv)
     built_admin = None
     try:
         if args.command in ADMIN_COMMANDS:
             if admin is None:
                 admin = built_admin = build_admin()
-            runner = _run_plans_command if args.command == "plans" else _run_servers_command
-            runner(args, admin)
+            if args.command == "users":
+                _run_users_command(args, admin, read_password or _read_password)
+            elif args.command == "plans":
+                _run_plans_command(args, admin)
+            else:
+                _run_servers_command(args, admin)
         else:
             _run_container_command(args, service if service is not None else build_service())
     except ConfigurationError as error:

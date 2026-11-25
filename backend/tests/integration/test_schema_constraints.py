@@ -16,6 +16,7 @@ from app.domain.models import (
     MAX_CPU_MILLICORES,
     MAX_EMAIL_LENGTH,
     MAX_MEMORY_MB,
+    MAX_PASSWORD_HASH_LENGTH,
     MAX_PLAN_NAME_LENGTH,
     MAX_SERVER_NAME_LENGTH,
 )
@@ -106,6 +107,58 @@ def test_users_accept_the_longest_email_and_reject_duplicates(connection):
     with pytest.raises(IntegrityError) as excinfo:
         insert_user(connection, "ana@example.com")
     assert_rejected(excinfo, "uq_users_email")
+
+
+# --- user accounts ------------------------------------------------------------------
+
+
+def insert_account(connection, role="user", password_hash=None, is_active=True, email="acct@example.com"):
+    connection.execute(
+        text(
+            "INSERT INTO users (id, email, created_at, role, password_hash, is_active) "
+            "VALUES (:id, :email, :now, :role, :hash, :active)"
+        ),
+        {"id": uuid.uuid4(), "email": email, "now": NOW, "role": role, "hash": password_hash, "active": is_active},
+    )
+
+
+@pytest.mark.parametrize("role", ["superuser", "Admin", "ADMIN", "", "root"])
+def test_users_reject_unknown_roles(connection, role):
+    with pytest.raises(IntegrityError) as excinfo:
+        insert_account(connection, role=role)
+    assert_rejected(excinfo, "ck_users_role_valid")
+
+
+def test_users_accept_both_roles(connection):
+    insert_account(connection, role="user", email="u@example.com")
+    insert_account(connection, role="admin", email="a@example.com")
+
+
+@pytest.mark.parametrize("password_hash", ["", "x" * (MAX_PASSWORD_HASH_LENGTH + 1)])
+def test_users_reject_empty_or_oversized_password_hashes(connection, password_hash):
+    with pytest.raises(IntegrityError) as excinfo:
+        insert_account(connection, password_hash=password_hash)
+    assert_rejected(excinfo, "ck_users_password_hash_valid")
+
+
+def test_users_accept_no_hash_and_the_longest_hash(connection):
+    insert_account(connection, password_hash=None, email="none@example.com")
+    insert_account(connection, password_hash="x" * MAX_PASSWORD_HASH_LENGTH, email="long@example.com")
+
+
+def test_omitted_account_columns_get_safe_defaults(connection):
+    user_id = insert_user(connection, "defaults@example.com")
+    row = connection.execute(
+        text("SELECT role, is_active, password_hash FROM users WHERE id = :id"), {"id": user_id}
+    ).one()
+    assert (row.role, row.is_active, row.password_hash) == ("user", True, None)
+
+
+@pytest.mark.parametrize("column", ["role", "is_active"])
+def test_role_and_active_flag_cannot_be_null(connection, column):
+    insert_account(connection, email="nulls@example.com")
+    with pytest.raises(IntegrityError):
+        connection.execute(text(f"UPDATE users SET {column} = NULL WHERE email = 'nulls@example.com'"))
 
 
 # --- plans --------------------------------------------------------------------

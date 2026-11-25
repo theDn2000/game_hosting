@@ -4,7 +4,7 @@ import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 from app.infrastructure.db.database import create_database_engine
 from app.infrastructure.db.models import Base
@@ -50,12 +50,17 @@ def test_upgrade_creates_the_expected_columns_keys_and_indexes(engine):
     upgrade(engine)
     inspector = inspect(engine)
     columns = {t: {c["name"]: c for c in inspector.get_columns(t)} for t in APP_TABLES}
-    assert set(columns["users"]) == {"id", "email", "created_at"}
+    assert set(columns["users"]) == {
+        "id", "email", "created_at", "role", "password_hash", "is_active",
+    }
     assert set(columns["plans"]) == {"id", "slug", "name", "memory_mb", "cpu_millicores"}
     assert set(columns["game_servers"]) == {
         "id", "owner_id", "plan_id", "game", "name", "container_name", "created_at",
     }
-    assert all(not column["nullable"] for table in columns.values() for column in table.values())
+    nullable = {
+        (table, name) for table, cols in columns.items() for name, c in cols.items() if c["nullable"]
+    }
+    assert nullable == {("users", "password_hash")}  # the only optional column
     assert inspector.get_pk_constraint("game_servers")["name"] == "pk_game_servers"
     foreign_keys = {fk["name"]: fk for fk in inspector.get_foreign_keys("game_servers")}
     assert set(foreign_keys) == {
@@ -104,4 +109,43 @@ def test_running_upgrade_twice_changes_nothing(engine):
     upgrade(engine)
     upgrade(engine)
     assert table_names(engine) == APP_TABLES
+    assert current_revision(engine) == head_revision()
+
+
+def test_the_users_account_columns_have_the_expected_nullability(engine):
+    upgrade(engine)
+    columns = {c["name"]: c for c in inspect(engine).get_columns("users")}
+    assert columns["role"]["nullable"] is False
+    assert columns["is_active"]["nullable"] is False
+    assert columns["password_hash"]["nullable"] is True  # no password yet is a valid state
+
+
+def test_upgrading_from_the_first_revision_keeps_existing_users_usable(engine):
+    upgrade(engine, "0001")
+    assert current_revision(engine) == "0001"
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO users (id, email, created_at) VALUES (gen_random_uuid(), 'old@example.com', now())")
+        )
+    upgrade(engine)
+    with engine.connect() as connection:
+        row = connection.execute(
+            text("SELECT role, is_active, password_hash FROM users WHERE email = 'old@example.com'")
+        ).one()
+    assert (row.role, row.is_active, row.password_hash) == ("user", True, None)
+
+
+def test_downgrading_to_the_first_revision_drops_only_the_account_columns(engine):
+    upgrade(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO users (id, email, created_at, role) VALUES (gen_random_uuid(), 'boss@example.com', now(), 'admin')")
+        )
+    downgrade(engine, "0001")
+    assert current_revision(engine) == "0001"
+    columns = {c["name"] for c in inspect(engine).get_columns("users")}
+    assert columns == {"id", "email", "created_at"}
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM users")).scalar_one() == 1
+    upgrade(engine)  # and it can be applied again
     assert current_revision(engine) == head_revision()
