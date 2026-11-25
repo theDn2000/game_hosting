@@ -39,6 +39,7 @@ import os
 import sys
 
 from app.composition import build_services
+from app.domain.auth import OPERATOR
 from app.domain.models import Role
 from app.errors import (
     AlreadyExistsError,
@@ -54,6 +55,7 @@ from app.errors import (
 )
 from app.infrastructure.db.database import DATABASE_URL_VARIABLE
 from app.infrastructure.docker_client import DockerClient
+from app.services.server_registry import MAX_PAGE_SIZE
 from app.services.server_service import (
     DEFAULT_LOG_TAIL,
     DEFAULT_STOP_TIMEOUT,
@@ -241,7 +243,7 @@ def _run_plans_command(args, admin):
 def _run_servers_command(args, admin):
     if args.action == "adopt":
         adoption = admin.registry.adopt_container(
-            args.container, args.owner, args.plan, name=args.name
+            OPERATOR, args.container, args.owner, args.plan, name=args.name
         )
         registered = adoption.registered
         print(f"Adopted container '{args.container}' as a platform server.")
@@ -258,10 +260,21 @@ def _run_servers_command(args, admin):
         ("ID", "NAME", "CONTAINER", "OWNER", "PLAN", "STATUS"),
         [
             (r.server.id, r.server.name, r.server.container_name, r.owner.email, r.plan.slug, r.status)
-            for r in admin.registry.list_servers()
+            for r in _all_servers(admin.registry)
         ],
     )
     print(table or "(no servers)")
+
+
+def _all_servers(registry):
+    """Every server, read page by page (the CLI acts as the local operator)."""
+    offset = 0
+    while True:
+        page = registry.list_servers(OPERATOR, limit=MAX_PAGE_SIZE, offset=offset)
+        yield from page.items
+        offset += MAX_PAGE_SIZE
+        if offset >= page.total or not page.items:
+            return
 
 
 def _yes_no(value):

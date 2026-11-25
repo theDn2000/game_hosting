@@ -14,7 +14,7 @@ entities raise `UserNotFoundError`, `PlanNotFoundError` or `ServerNotFoundError`
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
@@ -43,6 +43,9 @@ class UserRepository(Protocol):
     def list_all(self) -> list[User]:
         """Ordered by e-mail."""
 
+    def get_many(self, user_ids: Iterable[UUID]) -> dict[UUID, User]:
+        """One query for many users. Unknown ids are simply absent."""
+
 
 class PlanRepository(Protocol):
     def add(self, plan: Plan) -> None:
@@ -55,6 +58,9 @@ class PlanRepository(Protocol):
 
     def list_all(self) -> list[Plan]:
         """Ordered by slug."""
+
+    def get_many(self, plan_ids: Iterable[UUID]) -> dict[UUID, Plan]:
+        """One query for many plans. Unknown ids are simply absent."""
 
 
 class GameServerRepository(Protocol):
@@ -75,6 +81,15 @@ class GameServerRepository(Protocol):
 
     def list_all(self) -> list[GameServer]:
         """Ordered by creation time, then id."""
+
+    def list_page(
+        self, owner_id: UUID | None, limit: int, offset: int
+    ) -> list[GameServer]:
+        """One page of servers (of one owner, or of everyone when `owner_id` is
+        None), ordered by creation time, then id."""
+
+    def count(self, owner_id: UUID | None) -> int:
+        """How many servers there are (of one owner, or of everyone)."""
 
 
 class SessionRepository(Protocol):

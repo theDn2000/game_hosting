@@ -166,3 +166,42 @@ def test_managed_container_is_accepted(client, sdk):
     sdk.container.labels = {MANAGED_LABEL: MANAGED_LABEL_VALUE, "other": "x"}
     sdk.container.status = "running"
     assert client.get_status("minecraft-dev") == "running"
+
+
+# --- many statuses with one call --------------------------------------------------
+
+
+def _listed(name, status):
+    container = MagicMock()
+    container.name, container.status = name, status
+    return container
+
+
+def test_get_statuses_uses_one_filtered_listing_and_returns_only_requested_names(client, sdk):
+    sdk.containers.list.return_value = [
+        _listed("a", "running"), _listed("b", "exited"), _listed("not-requested", "running"),
+    ]
+    assert client.get_statuses(["a", "b", "gone"]) == {"a": "running", "b": "exited"}
+    sdk.containers.list.assert_called_once_with(
+        all=True, filters={"label": f"{MANAGED_LABEL}={MANAGED_LABEL_VALUE}"}
+    )
+    sdk.containers.get.assert_not_called()
+
+
+def test_get_statuses_for_no_names_does_not_call_docker(client, sdk):
+    assert client.get_statuses([]) == {}
+    sdk.containers.list.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (DockerException("down"), RuntimeUnavailableError),
+        (RequestsConnectionError("down"), RuntimeUnavailableError),
+        (APIError("boom"), ServerOperationError),
+    ],
+)
+def test_get_statuses_translates_docker_errors(client, sdk, error, expected):
+    sdk.containers.list.side_effect = error
+    with pytest.raises(expected):
+        client.get_statuses(["a"])

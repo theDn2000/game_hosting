@@ -47,6 +47,11 @@ class Actor:
         return cls(user_id=user.id, role=user.role)
 
 
+# The local operator (the `cli.py` commands run by someone with access to the
+# host). It is not a database user and can never sign in.
+OPERATOR = Actor(user_id=uuid.UUID(int=0), role=Role.ADMIN)
+
+
 @dataclass(frozen=True, slots=True)
 class Session:
     id: uuid.UUID

@@ -17,7 +17,8 @@ from app.errors import (
     UserNotFoundError,
 )
 from app.infrastructure.db.database import DATABASE_URL_VARIABLE
-from app.services.server_registry import Adoption, RegisteredServer
+from app.domain.auth import OPERATOR
+from app.services.server_registry import Adoption, Page, RegisteredServer
 from app.services.server_service import ServerStatus
 
 NOW = datetime(2026, 11, 4, tzinfo=UTC)
@@ -63,17 +64,19 @@ class FakeRegistry:
         self.error, self.servers, self.owner_created = error, list(servers), owner_created
         self.calls = []
 
-    def adopt_container(self, container, owner_email, plan_slug, name):
+    def adopt_container(self, actor, container, owner_email, plan_slug, name):
+        assert actor is OPERATOR
         self.calls.append(("adopt", container, owner_email, plan_slug, name))
         if self.error:
             raise self.error
         return Adoption(registered(name, container, owner_email, plan_slug), self.owner_created)
 
-    def list_servers(self):
-        self.calls.append(("list",))
+    def list_servers(self, actor, limit, offset):
+        assert actor is OPERATOR
+        self.calls.append(("list", limit, offset))
         if self.error:
             raise self.error
-        return self.servers
+        return Page(self.servers[offset : offset + limit], len(self.servers), limit, offset)
 
 
 class FakeAdmin:
@@ -292,3 +295,13 @@ def test_real_process_without_a_database_url_exits_with_9_and_no_traceback():
     assert result.returncode == cli.EXIT_CONFIGURATION
     assert "Traceback" not in result.stderr
     assert DATABASE_URL_VARIABLE in result.stderr
+
+
+def test_servers_list_reads_every_page(capsys):
+    servers = [registered(f"World {i}", f"box-{i}", f"u{i}@example.com") for i in range(205)]
+    admin = FakeAdmin(registry=FakeRegistry(servers=servers))
+    code, _ = run(["servers", "list"], admin)
+    lines = capsys.readouterr().out.splitlines()
+    assert code == cli.EXIT_OK
+    assert len(lines) == 1 + 205
+    assert admin.registry.calls == [("list", 100, 0), ("list", 100, 100), ("list", 100, 200)]

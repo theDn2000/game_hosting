@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
+from app.domain.auth import OPERATOR
 from app.domain.models import Game
 from app.errors import (
     DatabaseUnavailableError,
@@ -36,6 +37,7 @@ from app.errors import (
     ServerNotFoundError,
     ServerOperationError,
 )
+from app.services.server_registry import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from app.services.server_service import (
     DEFAULT_LOG_TAIL,
     DEFAULT_STOP_TIMEOUT,
@@ -50,6 +52,8 @@ MIN_TOKEN_LENGTH = 16
 
 _bearer = HTTPBearer(auto_error=False)
 
+PageLimit = Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE, description="Maximum servers to return")]
+PageOffset = Annotated[int, Query(ge=0, description="Servers to skip")]
 ServerId = Annotated[UUID, Path(description="Platform server id (UUID)")]
 StopTimeout = Annotated[
     int,
@@ -165,31 +169,36 @@ def create_app(registry, api_token, enable_docs=False, lifespan=None):
         return {"status": "ok"}
 
     @app.get("/servers", response_model=list[ServerResponse], dependencies=protected)
-    def list_servers(registry: Registry):
-        return [_to_response(r) for r in registry.list_servers()]
+    def list_servers(
+        registry: Registry, limit: PageLimit = DEFAULT_PAGE_SIZE, offset: PageOffset = 0
+    ):
+        # Until sessions are wired in (Phase 4A.4) the shared token acts as the
+        # local operator, who sees every server.
+        page = registry.list_servers(OPERATOR, limit=limit, offset=offset)
+        return [_to_response(r) for r in page.items]
 
     @app.get("/servers/{server_id}", response_model=ServerResponse, dependencies=protected)
     def get_server(server_id: ServerId, registry: Registry):
-        return _to_response(registry.get_server(server_id))
+        return _to_response(registry.get_server(OPERATOR, server_id))
 
     @app.post("/servers/{server_id}/start", response_model=ServerResponse, dependencies=protected)
     def start(server_id: ServerId, registry: Registry):
-        return _to_response(registry.start_server(server_id))
+        return _to_response(registry.start_server(OPERATOR, server_id))
 
     @app.post("/servers/{server_id}/stop", response_model=ServerResponse, dependencies=protected)
     def stop(
         server_id: ServerId, registry: Registry, timeout: StopTimeout = DEFAULT_STOP_TIMEOUT
     ):
-        return _to_response(registry.stop_server(server_id, timeout=timeout))
+        return _to_response(registry.stop_server(OPERATOR, server_id, timeout=timeout))
 
     @app.post("/servers/{server_id}/restart", response_model=ServerResponse, dependencies=protected)
     def restart(
         server_id: ServerId, registry: Registry, timeout: StopTimeout = DEFAULT_STOP_TIMEOUT
     ):
-        return _to_response(registry.restart_server(server_id, timeout=timeout))
+        return _to_response(registry.restart_server(OPERATOR, server_id, timeout=timeout))
 
     @app.get("/servers/{server_id}/logs", response_class=PlainTextResponse, dependencies=protected)
     def logs(server_id: ServerId, registry: Registry, tail: LogTail = DEFAULT_LOG_TAIL):
-        return registry.get_server_logs(server_id, tail=tail)
+        return registry.get_server_logs(OPERATOR, server_id, tail=tail)
 
     return app

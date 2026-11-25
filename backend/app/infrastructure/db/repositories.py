@@ -16,7 +16,7 @@ in-memory reference implementation.
 
 from contextlib import contextmanager
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
 
 from app.domain.auth import Session
@@ -183,6 +183,14 @@ class SqlUserRepository(_SqlRepository):
             rows = self._session.execute(select(UserRow).order_by(UserRow.email)).scalars()
             return [_to_user(row) for row in rows]
 
+    def get_many(self, user_ids):
+        ids = set(user_ids)
+        if not ids:
+            return {}
+        with self._database_errors():
+            rows = self._session.execute(select(UserRow).where(UserRow.id.in_(ids))).scalars()
+            return {row.id: _to_user(row) for row in rows}
+
     def get(self, user_id):
         with self._database_errors():
             row = self._session.get(UserRow, user_id)
@@ -230,6 +238,14 @@ class SqlPlanRepository(_SqlRepository):
             rows = self._session.execute(select(PlanRow).order_by(PlanRow.slug)).scalars()
             return [_to_plan(row) for row in rows]
 
+    def get_many(self, plan_ids):
+        ids = set(plan_ids)
+        if not ids:
+            return {}
+        with self._database_errors():
+            rows = self._session.execute(select(PlanRow).where(PlanRow.id.in_(ids))).scalars()
+            return {row.id: _to_plan(row) for row in rows}
+
 
 class SqlGameServerRepository(_SqlRepository):
     def add(self, server):
@@ -268,11 +284,25 @@ class SqlGameServerRepository(_SqlRepository):
     def list_all(self):
         return self._list(select(GameServerRow))
 
-    def _list(self, statement):
+    def list_page(self, owner_id, limit, offset):
+        statement = select(GameServerRow)
+        if owner_id is not None:
+            statement = statement.where(GameServerRow.owner_id == owner_id)
+        return self._list(statement, limit=limit, offset=offset)
+
+    def count(self, owner_id):
+        statement = select(func.count()).select_from(GameServerRow)
+        if owner_id is not None:
+            statement = statement.where(GameServerRow.owner_id == owner_id)
         with self._database_errors():
-            rows = self._session.execute(
-                statement.order_by(GameServerRow.created_at, GameServerRow.id)
-            ).scalars()
+            return self._session.execute(statement).scalar_one()
+
+    def _list(self, statement, limit=None, offset=0):
+        statement = statement.order_by(GameServerRow.created_at, GameServerRow.id)
+        if limit is not None:
+            statement = statement.limit(limit).offset(offset)
+        with self._database_errors():
+            rows = self._session.execute(statement).scalars()
             return [_to_server(row) for row in rows]
 
 

@@ -483,3 +483,66 @@ def test_users_are_listed_ordered_by_email(uow_factory):
         uow.commit()
     with uow_factory() as uow:
         assert [u.email for u in uow.users.list_all()] == sorted(emails)
+
+
+# --- bulk lookups and pages -------------------------------------------------------
+
+
+def test_get_many_returns_the_known_users_and_plans_and_ignores_the_rest(uow_factory):
+    ana, bob = make_user("ana@example.com"), make_user("bob@example.com")
+    basic, pro = make_plan("basic"), make_plan("pro")
+    with uow_factory() as uow:
+        for user in (ana, bob):
+            uow.users.add(user)
+        for plan in (basic, pro):
+            uow.plans.add(plan)
+        uow.commit()
+    with uow_factory() as uow:
+        assert uow.users.get_many([ana.id, uuid.uuid4(), ana.id]) == {ana.id: ana}
+        assert uow.users.get_many(iter([bob.id, ana.id])) == {ana.id: ana, bob.id: bob}
+        assert uow.users.get_many([]) == {}
+        assert uow.plans.get_many({pro.id, uuid.uuid4()}) == {pro.id: pro}
+        assert uow.plans.get_many([]) == {}
+
+
+def _seed_servers(uow_factory, per_owner=(3, 2)):
+    plan = make_plan()
+    owners = [make_user(f"owner{i}@example.com") for i in range(len(per_owner))]
+    servers = []
+    with uow_factory() as uow:
+        uow.plans.add(plan)
+        for owner in owners:
+            uow.users.add(owner)
+        minute = 0
+        # Interleaved creation times, so ordering must come from the data.
+        for round_ in range(max(per_owner)):
+            for owner, count in zip(owners, per_owner):
+                if round_ < count:
+                    server = make_server(owner, plan, f"S{minute}", minutes=minute)
+                    uow.servers.add(server)
+                    servers.append(server)
+                    minute += 1
+        uow.commit()
+    return owners, servers
+
+
+def test_list_page_slices_in_creation_order_for_everyone_or_one_owner(uow_factory):
+    owners, servers = _seed_servers(uow_factory)
+    with uow_factory() as uow:
+        assert uow.servers.list_page(None, 2, 0) == servers[0:2]
+        assert uow.servers.list_page(None, 2, 2) == servers[2:4]
+        assert uow.servers.list_page(None, 2, 4) == servers[4:5]
+        assert uow.servers.list_page(None, 2, 5) == []
+        mine = [s for s in servers if s.owner_id == owners[1].id]
+        assert uow.servers.list_page(owners[1].id, 10, 0) == mine
+        assert uow.servers.list_page(owners[1].id, 1, 1) == mine[1:2]
+        assert uow.servers.list_page(uuid.uuid4(), 10, 0) == []
+
+
+def test_count_matches_the_scope_of_the_listing(uow_factory):
+    owners, _ = _seed_servers(uow_factory)
+    with uow_factory() as uow:
+        assert uow.servers.count(None) == 5
+        assert uow.servers.count(owners[0].id) == 3
+        assert uow.servers.count(owners[1].id) == 2
+        assert uow.servers.count(uuid.uuid4()) == 0

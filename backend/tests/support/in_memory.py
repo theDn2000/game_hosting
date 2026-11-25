@@ -60,6 +60,9 @@ class _Users:
     def list_all(self):
         return sorted(self._users.values(), key=lambda user: user.email)
 
+    def get_many(self, user_ids):
+        return {i: self._users[i] for i in set(user_ids) if i in self._users}
+
 
 class _Plans:
     def __init__(self, plans):
@@ -83,6 +86,9 @@ class _Plans:
 
     def list_all(self):
         return sorted(self._plans.values(), key=lambda plan: plan.slug)
+
+    def get_many(self, plan_ids):
+        return {i: self._plans[i] for i in set(plan_ids) if i in self._plans}
 
 
 class _Servers:
@@ -119,6 +125,13 @@ class _Servers:
 
     def list_all(self):
         return _ordered(self._servers.values())
+
+    def list_page(self, owner_id, limit, offset):
+        chosen = (s for s in self._servers.values() if owner_id is None or s.owner_id == owner_id)
+        return _ordered(chosen)[offset : offset + limit]
+
+    def count(self, owner_id):
+        return sum(1 for s in self._servers.values() if owner_id is None or s.owner_id == owner_id)
 
 
 class _Sessions:

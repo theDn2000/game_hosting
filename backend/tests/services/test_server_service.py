@@ -170,3 +170,22 @@ def test_infrastructure_errors_propagate_from_operations(error):
     service, _ = make_service(error=error)
     with pytest.raises(type(error)):
         service.start_server(NAME)
+
+
+# --- many statuses ----------------------------------------------------------------
+
+
+def test_server_statuses_come_from_one_call_with_missing_ones_not_found():
+    docker = FakeDockerClient({"a": "running", "b": "exited", "c": "something-new"})
+    docker.get_statuses = lambda names: (
+        docker.calls.append(("statuses", tuple(names)))
+        or {n: docker.statuses[n] for n in names if n in docker.statuses}
+    )
+    service = ServerService(docker)
+    assert service.get_server_statuses(iter(["a", "b", "c", "gone"])) == {
+        "a": ServerStatus.RUNNING,
+        "b": ServerStatus.EXITED,
+        "c": ServerStatus.UNKNOWN,
+        "gone": ServerStatus.NOT_FOUND,
+    }
+    assert docker.calls == [("statuses", ("a", "b", "c", "gone"))]

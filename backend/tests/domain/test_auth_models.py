@@ -150,3 +150,13 @@ def test_ipv4_ipv6_and_zone_ids_are_valid_client_keys(key):
 def test_a_plain_email_is_not_a_valid_email_hash():
     with pytest.raises(InvalidDataError):
         LoginFailure.new("ana@example.com", "203.0.113.7", NOW)
+
+
+# --- the local operator ------------------------------------------------------------
+
+
+def test_the_operator_is_an_administrator_that_is_not_a_database_user():
+    from app.domain.auth import OPERATOR
+
+    assert OPERATOR.is_admin
+    assert OPERATOR.user_id.int == 0

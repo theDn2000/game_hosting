@@ -48,6 +48,16 @@ class ServerService:
         except ServerNotFoundError:
             return ServerStatus.NOT_FOUND
 
+    def get_server_statuses(self, server_names):
+        """Statuses of many servers with one Docker call: {name: status}, with
+        `ServerStatus.NOT_FOUND` for the ones that do not exist."""
+        names = list(server_names)
+        raw = self.docker_client.get_statuses(names)
+        return {
+            name: self._to_status(raw[name]) if name in raw else ServerStatus.NOT_FOUND
+            for name in names
+        }
+
     def start_server(self, server_name):
         if self._current_status(server_name) != ServerStatus.RUNNING:
             self.docker_client.start_container(server_name)
@@ -69,7 +79,10 @@ class ServerService:
 
     def _current_status(self, server_name):
         """Status of an existing server; raises ServerNotFoundError otherwise."""
-        raw_status = self.docker_client.get_status(server_name)
+        return self._to_status(self.docker_client.get_status(server_name))
+
+    @staticmethod
+    def _to_status(raw_status):
         try:
             return ServerStatus(raw_status)
         except ValueError:

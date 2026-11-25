@@ -15,7 +15,8 @@ from app.errors import (
     ServerNotFoundError,
     ServerOperationError,
 )
-from app.services.server_registry import RegisteredServer
+from app.domain.auth import OPERATOR
+from app.services.server_registry import Page, RegisteredServer
 from app.services.server_service import ServerStatus
 
 TOKEN = "test-token-0123456789abcdef"
@@ -42,39 +43,48 @@ def make_registered(server_id=SERVER_ID, status=ServerStatus.RUNNING, name="My w
 
 
 class FakeRegistry:
-    """Stand-in for ServerRegistry that records calls and can raise an error."""
+    """Stand-in for ServerRegistry that records calls and can raise an error.
+
+    Until sessions are wired in (4A.4) the API must act as the local operator on
+    every call, which the fake checks.
+    """
 
     def __init__(self, error=None):
         self.error = error
         self.calls = []
 
-    def _record(self, *call):
+    def _record(self, actor, *call):
+        assert actor is OPERATOR
         self.calls.append(call)
         if self.error:
             raise self.error
 
-    def list_servers(self):
-        self._record("list")
-        return [make_registered(SERVER_ID, name="first"), make_registered(OTHER_ID, ServerStatus.EXITED, "second")]
+    def list_servers(self, actor, limit, offset):
+        self._record(actor, "list", limit, offset)
+        items = [
+            make_registered(SERVER_ID, name="first"),
+            make_registered(OTHER_ID, ServerStatus.EXITED, "second"),
+        ]
+        return Page(items, total=2, limit=limit, offset=offset)
 
-    def get_server(self, server_id):
-        self._record("get", server_id)
+    def get_server(self, actor, server_id):
+        self._record(actor, "get", server_id)
         return make_registered(server_id)
 
-    def start_server(self, server_id):
-        self._record("start", server_id)
+    def start_server(self, actor, server_id):
+        self._record(actor, "start", server_id)
         return make_registered(server_id, ServerStatus.RUNNING)
 
-    def stop_server(self, server_id, timeout):
-        self._record("stop", server_id, timeout)
+    def stop_server(self, actor, server_id, timeout):
+        self._record(actor, "stop", server_id, timeout)
         return make_registered(server_id, ServerStatus.EXITED)
 
-    def restart_server(self, server_id, timeout):
-        self._record("restart", server_id, timeout)
+    def restart_server(self, actor, server_id, timeout):
+        self._record(actor, "restart", server_id, timeout)
         return make_registered(server_id, ServerStatus.RUNNING)
 
-    def get_server_logs(self, server_id, tail):
-        self._record("logs", server_id, tail)
+    def get_server_logs(self, actor, server_id, tail):
+        self._record(actor, "logs", server_id, tail)
         return "line 1\nline 2\n"
 
 
@@ -117,7 +127,7 @@ def test_list_returns_every_server_in_the_registry_order():
     assert response.status_code == 200
     assert [s["id"] for s in response.json()] == [str(SERVER_ID), str(OTHER_ID)]
     assert [s["status"] for s in response.json()] == ["running", "exited"]
-    assert registry.calls == [("list",)]
+    assert registry.calls == [("list", 50, 0)]
 
 
 @pytest.mark.parametrize(
@@ -263,6 +273,10 @@ def test_equivalent_uuid_spellings_reach_the_registry_as_the_same_id(written):
         ("get", f"{PATH}/logs?tail=0"),
         ("get", f"{PATH}/logs?tail=1001"),
         ("get", f"{PATH}/logs?tail=abc"),
+        ("get", "/servers?limit=0"),
+        ("get", "/servers?limit=101"),
+        ("get", "/servers?limit=abc"),
+        ("get", "/servers?offset=-1"),
     ],
 )
 def test_invalid_query_parameters_are_rejected_before_the_registry(method, path):
@@ -284,3 +298,9 @@ def test_query_parameter_boundaries_are_accepted(method, path, expected_call):
     client, registry = make_client()
     assert client.request(method, path).status_code == 200
     assert registry.calls == [expected_call]
+
+
+def test_list_passes_the_requested_page_to_the_registry():
+    client, registry = make_client()
+    assert client.get("/servers?limit=100&offset=200").status_code == 200
+    assert registry.calls == [("list", 100, 200)]

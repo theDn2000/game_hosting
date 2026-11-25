@@ -34,6 +34,22 @@ class DockerClient:
         """Return Docker's status string for the container (e.g. "running")."""
         return self._get_container(container_name).status
 
+    def get_statuses(self, container_names):
+        """Status of many containers with a single Docker call.
+
+        Returns {name: status} for the requested names that exist and are
+        managed; the others are absent. Cost grows with the number of managed
+        containers on the host, not with the number requested.
+        """
+        wanted = set(container_names)
+        if not wanted:
+            return {}
+        with self._translate_errors("the managed containers", "list"):
+            containers = self._get_client().containers.list(
+                all=True, filters={"label": f"{MANAGED_LABEL}={MANAGED_LABEL_VALUE}"}
+            )
+        return {c.name: c.status for c in containers if c.name in wanted}
+
     def start_container(self, container_name):
         container = self._get_container(container_name)
         with self._translate_errors(container_name, "start"):

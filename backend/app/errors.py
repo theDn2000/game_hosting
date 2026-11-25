@@ -68,6 +68,16 @@ class AlreadyExistsError(GameHostingError):
         self.field = field
 
 
+class PermissionDeniedError(GameHostingError):
+    """The caller is known but may not perform an operation that is not tied to
+    one resource (for example an administrative command). Operations on a
+    specific server a caller does not own raise `ServerNotFoundError` instead,
+    so the existence of other customers' servers is never revealed."""
+
+    def __init__(self):
+        super().__init__("You are not allowed to perform this operation.")
+
+
 class AuthenticationError(GameHostingError):
     """Wrong credentials, or a missing, expired or revoked session.
 

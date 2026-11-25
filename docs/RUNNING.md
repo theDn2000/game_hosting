@@ -126,7 +126,7 @@ Each customer will have their own account. For now the operator creates them (op
 
 - Password rules: 12 to 128 characters, any printable character (spaces and accents are fine), no complexity rules. A long passphrase is better than a short "complex" one. The password is stored only as an Argon2id hash; no command ever prints a password or a hash.
 - `--password-stdin` reads the first line of standard input, for example `Get-Content secret.txt | python cli.py users set-password --email ana@example.com --password-stdin`. Do not keep the password in a file you do not delete afterwards.
-- There are two roles: `user` (sees and operates only their own servers, enforced from step 4A.3) and `admin` (all servers). **The `admin` role can only be granted from this CLI.**
+- There are two roles: `user` (sees and operates only their own servers; enforced by the services since step 4A.3 and reachable over HTTP in 4A.4) and `admin` (all servers). **The `admin` role can only be granted from this CLI.**
 - An account created by adopting a container (`servers adopt`) has no password and cannot sign in until you set one.
 - The sign-in logic exists (sessions, throttling, sign-out), but nothing exposes it over HTTP yet: the endpoints and the panel arrive in steps 4A.4 and 4B. Until then these accounts exist but cannot sign in from anywhere.
 - **Changing a password or disabling an account ends all of that user's sessions** (so a stolen session does not survive). To end every session of an account without changing anything, for example after a suspected leak: `.\.venv\Scripts\python.exe cli.py users sign-out --email ana@example.com`.
