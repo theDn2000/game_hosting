@@ -15,6 +15,7 @@ Usage (from the backend/ directory):
     python cli.py users set-role --email EMAIL --role user|admin
     python cli.py users disable --email EMAIL
     python cli.py users enable --email EMAIL
+    python cli.py users sign-out --email EMAIL
     python cli.py users list
 
 This is a thin layer over the application services: it parses arguments,
@@ -187,6 +188,11 @@ def build_parser():
         toggle = user_actions.add_parser(action, help=help_text)
         toggle.add_argument("--email", required=True)
 
+    sign_out = user_actions.add_parser(
+        "sign-out", help="end every session of an account (for example after a suspected leak)"
+    )
+    sign_out.add_argument("--email", required=True)
+
     user_actions.add_parser("list", help="list accounts")
     return parser
 
@@ -300,6 +306,9 @@ def _run_users_command(args, admin, read_password):
     elif args.action == "set-role":
         user = accounts.set_role(args.email, Role(args.role))
         print(f"Role of '{user.email}' is now {user.role}.")
+    elif args.action == "sign-out":
+        count = accounts.revoke_sessions(args.email)
+        print(f"Ended {count} session(s) of '{args.email}'.")
     elif args.action in ("disable", "enable"):
         user = accounts.set_active(args.email, args.action == "enable")
         print(f"Account '{user.email}' is now {'active' if user.is_active else 'disabled'}.")

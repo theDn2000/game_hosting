@@ -110,6 +110,7 @@ class _TrackedUow:
         self.users, self.plans, self.servers = (
             self._inner.users, self._inner.plans, self._inner.servers,
         )
+        self.sessions, self.login_failures = self._inner.sessions, self._inner.login_failures
         return self
 
     def __exit__(self, *exc):

@@ -128,7 +128,9 @@ Each customer will have their own account. For now the operator creates them (op
 - `--password-stdin` reads the first line of standard input, for example `Get-Content secret.txt | python cli.py users set-password --email ana@example.com --password-stdin`. Do not keep the password in a file you do not delete afterwards.
 - There are two roles: `user` (sees and operates only their own servers, enforced from step 4A.3) and `admin` (all servers). **The `admin` role can only be granted from this CLI.**
 - An account created by adopting a container (`servers adopt`) has no password and cannot sign in until you set one.
-- Signing in through the API and the panel arrives in steps 4A.2 and 4A.4; until then these accounts exist but nothing authenticates with them.
+- The sign-in logic exists (sessions, throttling, sign-out), but nothing exposes it over HTTP yet: the endpoints and the panel arrive in steps 4A.4 and 4B. Until then these accounts exist but cannot sign in from anywhere.
+- **Changing a password or disabling an account ends all of that user's sessions** (so a stolen session does not survive). To end every session of an account without changing anything, for example after a suspected leak: `.\.venv\Scripts\python.exe cli.py users sign-out --email ana@example.com`.
+- Failed sign-ins are throttled (5 per account and client, 30 per client and 20 per account in 15 minutes); the throttle lifts by itself. After pulling code that adds a migration, run `python -m alembic upgrade head` (the current schema revision is `0003`: it adds the `sessions` and `login_failures` tables).
 
 Exit codes: 0 ok, 1 other application error, 2 invalid usage, 3 not found (server, plan or user), 4 Docker unavailable, 5 operation failed, 6 already exists, 7 database unavailable, 8 invalid data, 9 configuration (for example a missing database URL).
 

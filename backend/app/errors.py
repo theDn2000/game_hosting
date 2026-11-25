@@ -66,3 +66,23 @@ class AlreadyExistsError(GameHostingError):
         super().__init__(f"A {entity} with this {field} already exists.")
         self.entity = entity
         self.field = field
+
+
+class AuthenticationError(GameHostingError):
+    """Wrong credentials, or a missing, expired or revoked session.
+
+    Deliberately says nothing about the cause: a wrong password, an unknown
+    e-mail, a disabled account and an account without a password must be
+    indistinguishable to the caller.
+    """
+
+    def __init__(self):
+        super().__init__("Invalid credentials or session.")
+
+
+class TooManyAttemptsError(GameHostingError):
+    """Too many failed sign-in attempts; try again after `retry_after` seconds."""
+
+    def __init__(self, retry_after):
+        super().__init__("Too many failed sign-in attempts. Try again later.")
+        self.retry_after = retry_after

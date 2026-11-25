@@ -2,6 +2,9 @@ import hashlib
 
 import pytest
 
+from datetime import UTC, datetime, timedelta
+
+from app.domain.auth import Session
 from app.domain.models import Role
 from app.domain.passwords import MIN_PASSWORD_LENGTH
 from app.errors import AlreadyExistsError, InvalidDataError, UserNotFoundError
@@ -42,6 +45,7 @@ class _Tracked:
         self.users, self.plans, self.servers = (
             self._inner.users, self._inner.plans, self._inner.servers,
         )
+        self.sessions, self.login_failures = self._inner.sessions, self._inner.login_failures
         return self
 
     def __exit__(self, *exc):
@@ -232,3 +236,76 @@ def test_errors_never_contain_the_password(env):
     with pytest.raises(InvalidDataError) as excinfo:
         accounts.create_user("not-an-email", password=password)
     assert password not in str(excinfo.value)
+
+
+# --- sessions are revoked when credentials or status change ------------------------------------
+
+NOW = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)
+
+
+def add_sessions(store, user, count, label):
+    sessions = []
+    for index in range(count):
+        digest = hashlib.sha256(f"{label}-{index}".encode()).hexdigest()
+        session = Session.new(user.id, digest, NOW, timedelta(days=7))
+        store.sessions[session.id] = session
+        sessions.append(session)
+    return sessions
+
+
+def revoked(store, session):
+    return store.sessions[session.id].revoked_at
+
+
+def test_a_new_password_signs_the_user_out_everywhere_and_only_that_user(env):
+    accounts, store, _ = env
+    ana = accounts.create_user("ana@example.com", password=PASSWORD)
+    bob = accounts.create_user("bob@example.com", password=PASSWORD)
+    anas = add_sessions(store, ana, 3, "ana")
+    (bobs,) = add_sessions(store, bob, 1, "bob")
+    accounts.set_password("ana@example.com", "a brand new long password")
+    assert all(revoked(store, s) is not None for s in anas)
+    assert revoked(store, bobs) is None
+
+
+def test_a_rejected_password_does_not_sign_anyone_out(env):
+    accounts, store, _ = env
+    ana = accounts.create_user("ana@example.com", password=PASSWORD)
+    (session,) = add_sessions(store, ana, 1, "ana")
+    with pytest.raises(InvalidDataError):
+        accounts.set_password("ana@example.com", "short")
+    assert revoked(store, session) is None
+
+
+def test_disabling_an_account_signs_the_user_out_but_enabling_does_not_touch_sessions(env):
+    accounts, store, _ = env
+    ana = accounts.create_user("ana@example.com", password=PASSWORD)
+    (session,) = add_sessions(store, ana, 1, "ana")
+    accounts.set_active("ana@example.com", False)
+    assert revoked(store, session) is not None
+    (other,) = add_sessions(store, ana, 1, "later")
+    accounts.set_active("ana@example.com", True)
+    assert revoked(store, other) is None
+
+
+def test_changing_the_role_keeps_sessions_because_the_role_is_read_on_each_request(env):
+    accounts, store, _ = env
+    ana = accounts.create_user("ana@example.com", password=PASSWORD)
+    (session,) = add_sessions(store, ana, 1, "ana")
+    accounts.set_role("ana@example.com", Role.ADMIN)
+    assert revoked(store, session) is None
+
+
+def test_the_operator_can_end_all_sessions_of_an_account(env):
+    accounts, store, _ = env
+    ana = accounts.create_user("ana@example.com", password=PASSWORD)
+    sessions = add_sessions(store, ana, 4, "ana")
+    assert accounts.revoke_sessions("ANA@example.com") == 4
+    assert accounts.revoke_sessions("ana@example.com") == 0
+    assert all(revoked(store, s) is not None for s in sessions)
+
+
+def test_ending_the_sessions_of_an_unknown_account_is_an_error(env):
+    accounts, _, _ = env
+    with pytest.raises(UserNotFoundError):
+        accounts.revoke_sessions("nobody@example.com")

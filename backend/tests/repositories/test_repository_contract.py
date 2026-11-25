@@ -10,7 +10,6 @@ import uuid
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import text
 
 from app.domain.models import GameServer, Plan, Role, User
 from app.errors import (
@@ -19,27 +18,8 @@ from app.errors import (
     ServerNotFoundError,
     UserNotFoundError,
 )
-from app.infrastructure.db.database import create_database_engine, create_session_factory
-from app.infrastructure.db.repositories import SqlUnitOfWork
-from tests.support.in_memory import InMemoryStore, InMemoryUnitOfWork
 
 T0 = datetime(2026, 10, 29, 12, 0, tzinfo=UTC)
-
-
-@pytest.fixture(
-    params=["memory", pytest.param("postgres", marks=pytest.mark.integration)]
-)
-def uow_factory(request):
-    if request.param == "memory":
-        store = InMemoryStore()
-        return lambda: InMemoryUnitOfWork(store)
-    # A migrated PostgreSQL database shared by the session; emptied before each test.
-    engine = create_database_engine(request.getfixturevalue("migrated_database_url"))
-    request.addfinalizer(engine.dispose)
-    with engine.begin() as connection:
-        connection.execute(text("TRUNCATE game_servers, plans, users"))
-    session_factory = create_session_factory(engine)
-    return lambda: SqlUnitOfWork(session_factory)
 
 
 def make_user(email="ana@example.com", **overrides):

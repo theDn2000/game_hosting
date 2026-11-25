@@ -17,7 +17,7 @@ pytestmark = pytest.mark.integration
 def services(migrated_database_url):
     engine = create_database_engine(migrated_database_url)
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE game_servers, plans, users"))
+        connection.execute(text("TRUNCATE sessions, login_failures, game_servers, plans, users"))
     engine.dispose()
     services = build_services(migrated_database_url)
     services.plans.add_plan("dev", "Dev", memory_mb=512, cpu_millicores=500)

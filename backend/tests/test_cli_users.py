@@ -44,6 +44,11 @@ class FakeAccounts:
         self._maybe_fail()
         return User.new(email).with_active(is_active)
 
+    def revoke_sessions(self, email):
+        self.calls.append(("revoke_sessions", email))
+        self._maybe_fail()
+        return 3
+
     def list_users(self):
         self.calls.append(("list",))
         self._maybe_fail()
@@ -163,6 +168,14 @@ def test_disable_and_enable(capsys, action, flag, word):
     assert f"Account 'ana@example.com' is now {word}." in capsys.readouterr().out
 
 
+def test_sign_out_ends_every_session_of_an_account(capsys):
+    code, admin, source = run(["users", "sign-out", "--email", "ana@example.com"])
+    assert code == cli.EXIT_OK
+    assert admin.accounts.calls == [("revoke_sessions", "ana@example.com")]
+    assert source.requests == []
+    assert "Ended 3 session(s) of 'ana@example.com'." in capsys.readouterr().out
+
+
 # --- list ----------------------------------------------------------------------------------
 
 
@@ -206,6 +219,7 @@ def test_errors_become_messages_and_exit_codes_without_leaking_the_password(caps
         ["users", "set-password", "--email", "ana@example.com"],
         ["users", "set-role", "--email", "ana@example.com", "--role", "user"],
         ["users", "disable", "--email", "ana@example.com"],
+        ["users", "sign-out", "--email", "ana@example.com"],
         ["users", "list"],
     ):
         code, _, _ = run(argv, admin)
@@ -226,6 +240,7 @@ def test_errors_become_messages_and_exit_codes_without_leaking_the_password(caps
         ["users", "set-password"],
         ["users", "disable"],
         ["users", "enable"],
+        ["users", "sign-out"],
     ],
 )
 def test_invalid_usage_exits_with_2_without_touching_anything(argv):

@@ -25,6 +25,8 @@ class InMemoryStore:
         self.users = {}
         self.plans = {}
         self.servers = {}
+        self.sessions = {}
+        self.login_failures = {}
 
 
 class _Users:
@@ -119,6 +121,100 @@ class _Servers:
         return _ordered(self._servers.values())
 
 
+class _Sessions:
+    def __init__(self, sessions, users):
+        self._sessions = sessions
+        self._users = users
+
+    def add(self, session):
+        if session.user_id not in self._users:
+            raise UserNotFoundError(session.user_id)
+        if session.id in self._sessions or any(
+            s.token_hash == session.token_hash for s in self._sessions.values()
+        ):
+            raise AlreadyExistsError("session", "token")
+        self._sessions[session.id] = session
+
+    def find_by_token_hash(self, token_hash):
+        return next((s for s in self._sessions.values() if s.token_hash == token_hash), None)
+
+    def touch(self, session_id, when):
+        session = self._sessions.get(session_id)
+        if session is not None:
+            self._sessions[session_id] = session.with_last_seen(when)
+
+    def revoke(self, session_id, when):
+        session = self._sessions.get(session_id)
+        if session is not None and session.revoked_at is None:
+            self._sessions[session_id] = session.revoked(when)
+
+    def revoke_all_for_user(self, user_id, when):
+        count = 0
+        for session_id, session in list(self._sessions.items()):
+            if session.user_id == user_id and session.revoked_at is None:
+                self._sessions[session_id] = session.revoked(when)
+                count += 1
+        return count
+
+    def list_active_for_user(self, user_id, now):
+        active = [
+            s for s in self._sessions.values()
+            if s.user_id == user_id and s.revoked_at is None and s.expires_at > now
+        ]
+        return sorted(active, key=lambda s: (s.created_at, s.id), reverse=True)
+
+    def revoke_oldest_beyond(self, user_id, keep, now):
+        excess = self.list_active_for_user(user_id, now)[keep:]
+        for session in excess:
+            self._sessions[session.id] = session.revoked(now)
+        return len(excess)
+
+    def delete_finished_before(self, before, limit):
+        finished = [
+            s for s in self._sessions.values()
+            if s.expires_at < before or (s.revoked_at is not None and s.revoked_at < before)
+        ]
+        finished.sort(key=lambda s: (s.created_at, s.id))
+        for session in finished[:limit]:
+            del self._sessions[session.id]
+        return min(len(finished), limit)
+
+
+class _LoginFailures:
+    def __init__(self, failures):
+        self._failures = failures
+
+    def add(self, failure):
+        self._failures[failure.id] = failure
+
+    def recent(self, since, email_hash=None, client_key=None, limit=1000):
+        times = sorted(
+            f.occurred_at for f in self._failures.values()
+            if f.occurred_at >= since
+            and (email_hash is None or f.email_hash == email_hash)
+            and (client_key is None or f.client_key == client_key)
+        )
+        return times[:limit]
+
+    def delete(self, email_hash, client_key):
+        doomed = [
+            f.id for f in self._failures.values()
+            if f.email_hash == email_hash and f.client_key == client_key
+        ]
+        for failure_id in doomed:
+            del self._failures[failure_id]
+        return len(doomed)
+
+    def delete_older_than(self, before, limit):
+        old = sorted(
+            (f for f in self._failures.values() if f.occurred_at < before),
+            key=lambda f: (f.occurred_at, f.id),
+        )[:limit]
+        for failure in old:
+            del self._failures[failure.id]
+        return len(old)
+
+
 class InMemoryUnitOfWork:
     def __init__(self, store):
         self._store = store
@@ -127,24 +223,34 @@ class InMemoryUnitOfWork:
         self._users = dict(self._store.users)
         self._plans = dict(self._store.plans)
         self._servers = dict(self._store.servers)
+        self._sessions = dict(self._store.sessions)
+        self._login_failures = dict(self._store.login_failures)
         self.users = _Users(self._users)
         self.plans = _Plans(self._plans)
         self.servers = _Servers(self._servers, self._users, self._plans)
+        self.sessions = _Sessions(self._sessions, self._users)
+        self.login_failures = _LoginFailures(self._login_failures)
         return self
 
     def __exit__(self, exc_type, exc, traceback):
         # Never commits implicitly: whatever was not committed is dropped.
         self._users = self._plans = self._servers = None
+        self._sessions = self._login_failures = None
+
+    def _working_copies(self):
+        return {
+            "users": self._users,
+            "plans": self._plans,
+            "servers": self._servers,
+            "sessions": self._sessions,
+            "login_failures": self._login_failures,
+        }
 
     def commit(self):
-        self._store.users = dict(self._users)
-        self._store.plans = dict(self._plans)
-        self._store.servers = dict(self._servers)
+        for name, working in self._working_copies().items():
+            setattr(self._store, name, dict(working))
 
     def rollback(self):
-        self._users.clear()
-        self._users.update(self._store.users)
-        self._plans.clear()
-        self._plans.update(self._store.plans)
-        self._servers.clear()
-        self._servers.update(self._store.servers)
+        for name, working in self._working_copies().items():
+            working.clear()
+            working.update(getattr(self._store, name))

@@ -16,9 +16,10 @@ in-memory reference implementation.
 
 from contextlib import contextmanager
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import delete, insert, select, update
 from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
 
+from app.domain.auth import Session
 from app.domain.models import Game, GameServer, Plan, Role, User, normalize_email
 from app.errors import (
     AlreadyExistsError,
@@ -28,7 +29,13 @@ from app.errors import (
     UserNotFoundError,
 )
 from app.infrastructure.db.database import translate_connection_errors
-from app.infrastructure.db.models import GameServerRow, PlanRow, UserRow
+from app.infrastructure.db.models import (
+    GameServerRow,
+    LoginFailureRow,
+    PlanRow,
+    SessionRow,
+    UserRow,
+)
 
 # SQLSTATE codes reported by PostgreSQL.
 _UNIQUE_VIOLATION = "23505"
@@ -42,6 +49,9 @@ _UNIQUE_CONSTRAINTS = {
     "uq_plans_slug": ("plan", "slug"),
     "pk_game_servers": ("server", "id"),
     "uq_game_servers_container_name": ("server", "container name"),
+    "pk_sessions": ("session", "id"),
+    "uq_sessions_token_hash": ("session", "token"),
+    "pk_login_failures": ("login failure", "id"),
 }
 
 
@@ -53,7 +63,7 @@ def _translate_integrity_error(exc, owner_id=None, plan_id=None):
     if sqlstate == _UNIQUE_VIOLATION and constraint in _UNIQUE_CONSTRAINTS:
         return AlreadyExistsError(*_UNIQUE_CONSTRAINTS[constraint])
     if sqlstate == _FOREIGN_KEY_VIOLATION:
-        if constraint == "fk_game_servers_owner_id_users":
+        if constraint in ("fk_game_servers_owner_id_users", "fk_sessions_user_id_users"):
             return UserNotFoundError(owner_id)
         if constraint == "fk_game_servers_plan_id_plans":
             return PlanNotFoundError(plan_id)
@@ -100,6 +110,18 @@ def _to_server(row):
         name=row.name,
         container_name=row.container_name,
         created_at=row.created_at,
+    )
+
+
+def _to_session(row):
+    return Session(
+        id=row.id,
+        user_id=row.user_id,
+        token_hash=row.token_hash,
+        created_at=row.created_at,
+        last_seen_at=row.last_seen_at,
+        expires_at=row.expires_at,
+        revoked_at=row.revoked_at,
     )
 
 
@@ -254,6 +276,157 @@ class SqlGameServerRepository(_SqlRepository):
             return [_to_server(row) for row in rows]
 
 
+class SqlSessionRepository(_SqlRepository):
+    def add(self, session):
+        self._insert(
+            SessionRow,
+            dict(
+                id=session.id,
+                user_id=session.user_id,
+                token_hash=session.token_hash,
+                created_at=session.created_at,
+                last_seen_at=session.last_seen_at,
+                expires_at=session.expires_at,
+                revoked_at=session.revoked_at,
+            ),
+            owner_id=session.user_id,
+        )
+
+    def find_by_token_hash(self, token_hash):
+        with self._database_errors():
+            row = self._session.execute(
+                select(SessionRow).where(SessionRow.token_hash == token_hash)
+            ).scalar_one_or_none()
+        return _to_session(row) if row else None
+
+    def touch(self, session_id, when):
+        with self._database_errors():
+            self._session.execute(
+                update(SessionRow).where(SessionRow.id == session_id).values(last_seen_at=when)
+            )
+
+    def revoke(self, session_id, when):
+        with self._database_errors():
+            self._session.execute(
+                update(SessionRow)
+                .where(SessionRow.id == session_id, SessionRow.revoked_at.is_(None))
+                .values(revoked_at=when)
+            )
+
+    def revoke_all_for_user(self, user_id, when):
+        with self._database_errors():
+            result = self._session.execute(
+                update(SessionRow)
+                .where(SessionRow.user_id == user_id, SessionRow.revoked_at.is_(None))
+                .values(revoked_at=when)
+            )
+            return result.rowcount
+
+    def list_active_for_user(self, user_id, now):
+        with self._database_errors():
+            rows = self._session.execute(self._active_statement(user_id, now)).scalars()
+            return [_to_session(row) for row in rows]
+
+    def revoke_oldest_beyond(self, user_id, keep, now):
+        excess = (
+            select(SessionRow.id)
+            .where(*self._active_conditions(user_id, now))
+            .order_by(SessionRow.created_at.desc(), SessionRow.id.desc())
+            .offset(keep)
+        )
+        with self._database_errors():
+            result = self._session.execute(
+                update(SessionRow)
+                .where(SessionRow.id.in_(excess))
+                .values(revoked_at=now)
+                .execution_options(synchronize_session=False)
+            )
+            return result.rowcount
+
+    def delete_finished_before(self, before, limit):
+        doomed = (
+            select(SessionRow.id)
+            .where((SessionRow.expires_at < before) | (SessionRow.revoked_at < before))
+            .order_by(SessionRow.created_at, SessionRow.id)
+            .limit(limit)
+        )
+        with self._database_errors():
+            result = self._session.execute(
+                delete(SessionRow)
+                .where(SessionRow.id.in_(doomed))
+                .execution_options(synchronize_session=False)
+            )
+            return result.rowcount
+
+    @staticmethod
+    def _active_conditions(user_id, now):
+        return (
+            SessionRow.user_id == user_id,
+            SessionRow.revoked_at.is_(None),
+            SessionRow.expires_at > now,
+        )
+
+    def _active_statement(self, user_id, now):
+        return (
+            select(SessionRow)
+            .where(*self._active_conditions(user_id, now))
+            .order_by(SessionRow.created_at.desc(), SessionRow.id.desc())
+        )
+
+
+class SqlLoginFailureRepository(_SqlRepository):
+    def add(self, failure):
+        self._insert(
+            LoginFailureRow,
+            dict(
+                id=failure.id,
+                email_hash=failure.email_hash,
+                client_key=failure.client_key,
+                occurred_at=failure.occurred_at,
+            ),
+        )
+
+    def recent(self, since, email_hash=None, client_key=None, limit=1000):
+        statement = select(LoginFailureRow.occurred_at).where(LoginFailureRow.occurred_at >= since)
+        if email_hash is not None:
+            statement = statement.where(LoginFailureRow.email_hash == email_hash)
+        if client_key is not None:
+            statement = statement.where(LoginFailureRow.client_key == client_key)
+        with self._database_errors():
+            return list(
+                self._session.execute(
+                    statement.order_by(LoginFailureRow.occurred_at).limit(limit)
+                ).scalars()
+            )
+
+    def delete(self, email_hash, client_key):
+        with self._database_errors():
+            result = self._session.execute(
+                delete(LoginFailureRow)
+                .where(
+                    LoginFailureRow.email_hash == email_hash,
+                    LoginFailureRow.client_key == client_key,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            return result.rowcount
+
+    def delete_older_than(self, before, limit):
+        doomed = (
+            select(LoginFailureRow.id)
+            .where(LoginFailureRow.occurred_at < before)
+            .order_by(LoginFailureRow.occurred_at, LoginFailureRow.id)
+            .limit(limit)
+        )
+        with self._database_errors():
+            result = self._session.execute(
+                delete(LoginFailureRow)
+                .where(LoginFailureRow.id.in_(doomed))
+                .execution_options(synchronize_session=False)
+            )
+            return result.rowcount
+
+
 class SqlUnitOfWork:
     """One transaction. Changes are permanent only after `commit()`."""
 
@@ -265,6 +438,8 @@ class SqlUnitOfWork:
         self.users = SqlUserRepository(self._session)
         self.plans = SqlPlanRepository(self._session)
         self.servers = SqlGameServerRepository(self._session)
+        self.sessions = SqlSessionRepository(self._session)
+        self.login_failures = SqlLoginFailureRepository(self._session)
         return self
 
     def __exit__(self, exc_type, exc, traceback):

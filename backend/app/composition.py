@@ -13,6 +13,7 @@ from app.infrastructure.argon2_hasher import Argon2PasswordHasher
 from app.infrastructure.db.database import create_database_engine, create_session_factory
 from app.infrastructure.db.repositories import SqlUnitOfWork
 from app.infrastructure.docker_client import DockerClient
+from app.services.auth import AuthService
 from app.services.plan_catalog import PlanCatalog
 from app.services.server_registry import ServerRegistry
 from app.services.server_service import ServerService
@@ -25,6 +26,7 @@ class Services:
     registry: ServerRegistry
     plans: PlanCatalog
     accounts: UserAccounts
+    auth: AuthService
 
     def close(self):
         """Release the database connections."""
@@ -42,9 +44,11 @@ def build_services(database_url, docker_client=None):
         return SqlUnitOfWork(session_factory)
 
     server_service = ServerService(docker_client or DockerClient())
+    password_hasher = Argon2PasswordHasher()
     return Services(
         engine=engine,
         registry=ServerRegistry(uow_factory, server_service),
         plans=PlanCatalog(uow_factory),
-        accounts=UserAccounts(uow_factory, Argon2PasswordHasher()),
+        accounts=UserAccounts(uow_factory, password_hasher),
+        auth=AuthService(uow_factory, password_hasher),
     )

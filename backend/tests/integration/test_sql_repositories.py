@@ -21,7 +21,7 @@ NOW = datetime(2026, 10, 29, tzinfo=UTC)
 def engine(migrated_database_url):
     engine = create_database_engine(migrated_database_url)
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE game_servers, plans, users"))
+        connection.execute(text("TRUNCATE sessions, login_failures, game_servers, plans, users"))
     yield engine
     engine.dispose()
 

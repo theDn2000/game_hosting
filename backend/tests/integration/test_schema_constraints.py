@@ -161,6 +161,106 @@ def test_role_and_active_flag_cannot_be_null(connection, column):
         connection.execute(text(f"UPDATE users SET {column} = NULL WHERE email = 'nulls@example.com'"))
 
 
+# --- sessions and login failures -----------------------------------------------------
+
+
+def insert_session(connection, user_id, token_hash=None, created_at=NOW, last_seen_at=None,
+                   expires_at=None):
+    from datetime import timedelta
+
+    connection.execute(
+        text(
+            "INSERT INTO sessions (id, user_id, token_hash, created_at, last_seen_at, expires_at) "
+            "VALUES (:id, :user, :hash, :created, :seen, :expires)"
+        ),
+        {
+            "id": uuid.uuid4(),
+            "user": user_id,
+            "hash": token_hash if token_hash is not None else uuid.uuid4().hex * 2,
+            "created": created_at,
+            "seen": last_seen_at or created_at,
+            "expires": expires_at or created_at + timedelta(days=7),
+        },
+    )
+
+
+@pytest.mark.parametrize("token_hash", ["", "a" * 63, "a" * 65, "A" * 64, "g" * 64, "plain-token"])
+def test_sessions_reject_anything_but_a_lowercase_sha256_hex_digest(connection, token_hash):
+    user_id = insert_user(connection)
+    with pytest.raises(IntegrityError) as excinfo:
+        insert_session(connection, user_id, token_hash=token_hash)
+    assert_rejected(excinfo, "ck_sessions_token_hash_format")
+
+
+def test_sessions_accept_a_digest_and_reject_a_repeated_one(connection):
+    user_id = insert_user(connection)
+    insert_session(connection, user_id, token_hash="a" * 64)
+    with pytest.raises(IntegrityError) as excinfo:
+        insert_session(connection, user_id, token_hash="a" * 64)
+    assert_rejected(excinfo, "uq_sessions_token_hash")
+
+
+def test_sessions_cannot_be_seen_before_they_were_created(connection):
+    from datetime import timedelta
+
+    user_id = insert_user(connection)
+    with pytest.raises(IntegrityError) as excinfo:
+        insert_session(connection, user_id, last_seen_at=NOW - timedelta(seconds=1))
+    assert_rejected(excinfo, "ck_sessions_last_seen_after_created")
+
+
+@pytest.mark.parametrize("offset_seconds", [0, -60])
+def test_sessions_must_expire_after_they_were_created(connection, offset_seconds):
+    from datetime import timedelta
+
+    user_id = insert_user(connection)
+    with pytest.raises(IntegrityError) as excinfo:
+        insert_session(connection, user_id, expires_at=NOW + timedelta(seconds=offset_seconds))
+    assert_rejected(excinfo, "ck_sessions_expires_after_created")
+
+
+def test_sessions_need_an_existing_user(connection):
+    with pytest.raises(IntegrityError) as excinfo:
+        insert_session(connection, uuid.uuid4())
+    assert_rejected(excinfo, "fk_sessions_user_id_users")
+
+
+def test_deleting_a_user_deletes_their_sessions(connection):
+    user_id = insert_user(connection)
+    insert_session(connection, user_id)
+    insert_session(connection, user_id)
+    connection.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
+    assert connection.execute(text("SELECT count(*) FROM sessions")).scalar_one() == 0
+
+
+def insert_failure(connection, email_hash="a" * 64, client_key="203.0.113.7"):
+    connection.execute(
+        text(
+            "INSERT INTO login_failures (id, email_hash, client_key, occurred_at) "
+            "VALUES (:id, :hash, :key, :now)"
+        ),
+        {"id": uuid.uuid4(), "hash": email_hash, "key": client_key, "now": NOW},
+    )
+
+
+@pytest.mark.parametrize("email_hash", ["", "ana@example.com", "A" * 64, "a" * 63])
+def test_login_failures_only_store_a_hashed_email(connection, email_hash):
+    with pytest.raises(IntegrityError) as excinfo:
+        insert_failure(connection, email_hash=email_hash)
+    assert_rejected(excinfo, "ck_login_failures_email_hash_format")
+
+
+@pytest.mark.parametrize("client_key", ["", "x" * 65])
+def test_login_failures_bound_the_client_key_length(connection, client_key):
+    with pytest.raises(IntegrityError) as excinfo:
+        insert_failure(connection, client_key=client_key)
+    assert_rejected(excinfo, "ck_login_failures_client_key_length")
+
+
+def test_login_failures_accept_the_longest_client_key_and_need_no_account(connection):
+    insert_failure(connection, client_key="x" * 64)  # no matching user exists, by design
+
+
 # --- plans --------------------------------------------------------------------
 
 

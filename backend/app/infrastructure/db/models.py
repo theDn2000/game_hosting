@@ -28,6 +28,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.domain.auth import MAX_CLIENT_KEY_LENGTH
 from app.domain.models import (
     MAX_CPU_MILLICORES,
     MAX_EMAIL_LENGTH,
@@ -48,6 +49,7 @@ NAMING_CONVENTION = {
 # Regular expressions equivalent to the ones in app.domain.models.
 PLAN_SLUG_REGEX = "^[a-z0-9][a-z0-9-]{0,62}$"
 CONTAINER_NAME_REGEX = "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+SHA256_HEX_REGEX = "^[0-9a-f]{64}$"
 
 
 class Base(DeclarativeBase):
@@ -123,4 +125,47 @@ class GameServerRow(Base):
             f"container_name ~ '{CONTAINER_NAME_REGEX}'", name="container_name_format"
         ),
         Index("ix_game_servers_owner_id", "owner_id"),
+    )
+
+
+class SessionRow(Base):
+    __tablename__ = "sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    # CASCADE: a session cannot outlive its user.
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    token_hash: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("token_hash"),
+        CheckConstraint(f"token_hash ~ '{SHA256_HEX_REGEX}'", name="token_hash_format"),
+        CheckConstraint("last_seen_at >= created_at", name="last_seen_after_created"),
+        CheckConstraint("expires_at > created_at", name="expires_after_created"),
+        Index("ix_sessions_user_id_created_at", "user_id", "created_at"),
+        Index("ix_sessions_expires_at", "expires_at"),
+        Index("ix_sessions_revoked_at", "revoked_at"),
+    )
+
+
+class LoginFailureRow(Base):
+    __tablename__ = "login_failures"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    email_hash: Mapped[str] = mapped_column(Text)
+    client_key: Mapped[str] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(f"email_hash ~ '{SHA256_HEX_REGEX}'", name="email_hash_format"),
+        CheckConstraint(
+            f"char_length(client_key) BETWEEN 1 AND {MAX_CLIENT_KEY_LENGTH}",
+            name="client_key_length",
+        ),
+        Index("ix_login_failures_email_hash_client_key_occurred_at", "email_hash", "client_key", "occurred_at"),
+        Index("ix_login_failures_client_key_occurred_at", "client_key", "occurred_at"),
+        Index("ix_login_failures_occurred_at", "occurred_at"),
     )

@@ -19,6 +19,9 @@ from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
+    from app.domain.auth import LoginFailure, Session
     from app.domain.models import GameServer, Plan, User
 
 
@@ -74,10 +77,70 @@ class GameServerRepository(Protocol):
         """Ordered by creation time, then id."""
 
 
+class SessionRepository(Protocol):
+    """Server-side sign-in sessions. Only the hash of a token is ever stored.
+
+    A session is *active* when it is not revoked and has not passed its absolute
+    expiry; idle expiry is decided by the caller from `last_seen_at`.
+    """
+
+    def add(self, session: Session) -> None:
+        """Raises UserNotFoundError for an unknown user and AlreadyExistsError
+        for a token hash that is already stored."""
+
+    def find_by_token_hash(self, token_hash: str) -> Session | None: ...
+
+    def touch(self, session_id: UUID, when: datetime) -> None:
+        """Record activity. Unknown sessions are ignored."""
+
+    def revoke(self, session_id: UUID, when: datetime) -> None:
+        """Mark as revoked at `when`; an already revoked or unknown session is
+        left untouched."""
+
+    def revoke_all_for_user(self, user_id: UUID, when: datetime) -> int:
+        """Revoke every session of the user that is not revoked yet; returns how
+        many were revoked."""
+
+    def revoke_oldest_beyond(self, user_id: UUID, keep: int, now: datetime) -> int:
+        """Keep only the `keep` newest active sessions of the user and revoke the
+        rest; returns how many were revoked."""
+
+    def list_active_for_user(self, user_id: UUID, now: datetime) -> list[Session]:
+        """Newest first."""
+
+    def delete_finished_before(self, before: datetime, limit: int) -> int:
+        """Delete at most `limit` sessions that expired or were revoked before
+        `before`; returns how many were deleted."""
+
+
+class LoginFailureRepository(Protocol):
+    """Recent failed sign-ins, used to throttle repeated attempts."""
+
+    def add(self, failure: LoginFailure) -> None: ...
+
+    def recent(
+        self,
+        since: datetime,
+        email_hash: str | None = None,
+        client_key: str | None = None,
+        limit: int = 1000,
+    ) -> list[datetime]:
+        """Times of the failures at or after `since`, oldest first, optionally
+        filtered by e-mail hash and/or client key (both = that exact pair)."""
+
+    def delete(self, email_hash: str, client_key: str) -> int:
+        """Forget the failures of this exact pair; returns how many."""
+
+    def delete_older_than(self, before: datetime, limit: int) -> int:
+        """Delete at most `limit` failures older than `before`; returns how many."""
+
+
 class UnitOfWork(Protocol):
     users: UserRepository
     plans: PlanRepository
     servers: GameServerRepository
+    sessions: SessionRepository
+    login_failures: LoginFailureRepository
 
     def __enter__(self) -> UnitOfWork: ...
 
