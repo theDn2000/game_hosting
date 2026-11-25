@@ -42,6 +42,8 @@ This is a real product intended to evolve into production. Optimize for useful p
 - Use explicit, understandable error handling. Do not hide unexpected failures behind broad `except Exception` handlers or misleading success messages.
 - Avoid breaking changes to established interfaces without a clear reason and approval when the change is significant.
 - Treat all input as untrusted at API boundaries; apply authentication, authorization, validation, and resource limits when those boundaries are introduced.
+- Design for scalability from the start. Keep API processes stateless (sessions, rate limits and any other shared state live in the database or another shared store, never in process memory), paginate list endpoints with a maximum page size, avoid one external call per item on list paths, and keep infrastructure behind interfaces so more nodes and instances can be added without redesign.
+- Everything a user reads must be translatable (Spanish first, then English and other languages). Do not hard-code user-facing text in UI components or API handlers: the API returns stable machine-readable error codes, the client renders the localised message, and dates and numbers are formatted with locale-aware APIs. The panel must also be highly customisable (themeable design system) and optimised for a smooth, satisfying experience.
 
 ## Testing and Verification
 

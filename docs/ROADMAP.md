@@ -9,7 +9,7 @@ The product is a stack of layers; each phase adds one. Update this section at th
 ```
  Customer's browser
         |
- [ Web panel ]         Phase 4   not started   what customers click, and where they log in
+ [ Web panel ]         Phase 4   IN PROGRESS   what customers click, and where they log in (4A: backend security first)
         |
  [ HTTP API ]          Phase 2   done          the front door, with a lock (token); servers addressed by platform id
         |
@@ -28,9 +28,9 @@ Still to come: sign-up, login and a web panel, with ownership actually enforced 
 
 ## Current Phase
 
-**Phase 3 — Domain model and persistence: complete (2026-11-04).**
+**Phase 4 — Authentication, authorization and web control panel: in progress (plan approved 2026-11-25).** Phase 3 (domain model and persistence) was completed on 2026-11-04.
 
-Phase 4 (web panel and authentication) has not started. Two decisions carried over from earlier phases are still open: the dependency strategy (full freeze versus direct dependencies plus a lock file) and pinning the Minecraft image and version before production.
+Phase 4 is split into 4A (backend security: accounts, sessions, ownership enforcement, no UI) and 4B (the web panel), with a review between them; see the Phase 4 section. Two decisions carried over from earlier phases are still open: the dependency strategy (full freeze versus direct dependencies plus a lock file) and pinning the Minecraft image and version before production.
 
 
 ## Phases and Milestones
@@ -153,20 +153,44 @@ Decisions (2026-10-29):
 
 Definition-of-done evidence (2026-11-04): (1) *Server metadata can be persisted and retrieved*: 29 repository contract tests pass identically on the in-memory and the PostgreSQL implementations, and the real server round-trips through `servers adopt` and the API. (2) *The domain model does not use container names as permanent customer-facing IDs*: the customer-facing id is a UUID, the container name is internal, and tests assert that no API response contains it. (3) *Schema changes are reproducible and tested*: Alembic migration `0001` is verified up, down, repeated and idempotent on a fresh database, `alembic check` reports no difference between models and database, every CHECK, unique, foreign-key and RESTRICT rule is exercised against a real PostgreSQL, and all of it passes on Windows and on Ubuntu 24.04 (450 default and 105 integration tests).
 
-### Phase 4 — Web control panel
+### Phase 4 — Authentication, authorization and web control panel
 
-Goal: build a useful customer-facing interface.
+**Status: In progress (plan approved 2026-11-25).**
 
-- [ ] Select and configure React/Next.js project structure.
-- [ ] Build a server list and server detail/control view.
-- [ ] Connect the UI to the backend API.
-- [ ] Handle loading, empty, error, and operation-in-progress states.
-- [ ] Introduce authentication and authorization before exposing customer-specific operations publicly.
+Goal: every customer has their own account and manages only their own server(s) through a web panel that is smooth, satisfying and highly customisable to use.
+
+Approved decisions (2026-11-25):
+- **Accounts:** one per customer, created by the operator for now (no open sign-up). Self-service sign-up with e-mail verification, password recovery and similar account-lifecycle features arrive with billing (Phase 7). E-mail and password, hashed with Argon2id (`argon2-cffi`), minimum 12 and maximum 128 characters, no composition rules, never logged or returned; the CLI reads passwords with a hidden prompt or from standard input, never from an argument.
+- **Sessions:** server-side, opaque 256-bit token in an `HttpOnly`, `SameSite=Strict` cookie (`Secure` when served over HTTPS); the database stores only its hash; revocable; idle and absolute expiry; renewed on login. State-changing routes also require an anti-CSRF token. Login errors are generic, response time does not reveal whether an account exists, and failed attempts are throttled per account and per IP.
+- **Authorization:** the shared API token is removed from the HTTP API (the operator uses the CLI, which talks to the database directly, and an `admin` account). Every registry operation takes an `Actor` and denies by default: a `user` sees and operates only their own servers, an `admin` sees and operates all of them, and another user's server answers 404 (not 403) so its existence is not revealed. The `admin` role can only be granted from the CLI.
+- **Panel:** React. It must allow deep visual customisation (a themeable design system rather than a stock look), fluid interaction and a very smooth feel. The concrete stack (build tool, component and styling approach, animation, data fetching, internationalisation library) is proposed and approved at the start of 4B; the choice between a static single-page app served by FastAPI and Next.js stays reversible because components and the design system are portable between them.
+- **Same origin:** the API moves under `/api` and FastAPI serves the built panel, so no CORS is needed.
+- **Phase split:** 4A (backend security, no UI) and 4B (panel), with a review between them.
+
+Cross-cutting requirements recorded from the user (2026-11-25), now also permanent rules in `CLAUDE.md`:
+- **Translatable:** Spanish first, then English and other languages. No user-facing text hard-coded in components or handlers; the API returns stable machine-readable error codes (`code`) and the client renders the localised message; locale-aware formatting of dates and numbers; logical (direction-agnostic) CSS so right-to-left languages are possible; a per-user language preference (added with the first UI, a small migration).
+- **Always scalable:** stateless API processes (sessions and login throttling live in PostgreSQL, not in memory), paginated list endpoints with a maximum page size, Docker statuses fetched in bulk instead of one call per server, and infrastructure behind interfaces.
+
+Plan (one commit per step, with a report):
+- [ ] 4A.1 — Account data and passwords: migration `0002` (role, password hash, active flag on users), `Role`, `PasswordHasher` port with an Argon2id adapter, password policy, `UserAccounts` service and operator commands `users add/list/set-password/set-role/disable/enable`.
+- [ ] 4A.2 — `AuthService`: login, logout, session validation, DB-backed login throttling; migration `0003` (sessions, login attempts).
+- [ ] 4A.3 — Authorization in the registry with an `Actor`, a paginated list with bulk Docker statuses, and an ownership test matrix covering every route and operation.
+- [ ] 4A.4 — API: `/api` prefix, `/api/auth/login|logout|me`, cookie and CSRF protection, removal of the shared token, machine-readable error codes, pagination.
+- [ ] 4A.5 — Security review, Linux verification and documentation. **Stop for the user's review before 4B.**
+- [ ] 4B.1 — Frontend stack proposal and approval; toolchain (Node.js is not installed yet and needs the user's explicit permission), scaffold, typed API client, internationalisation and theming foundations, tests.
+- [ ] 4B.2 — Screens: sign-in, server list, server detail with start/stop/restart and logs; loading, empty, error and operation-in-progress states.
+- [ ] 4B.3 — Serve the panel from FastAPI, security headers (strict CSP), end-to-end verification.
+- [ ] 4B.4 — Documentation, Linux verification and closing review.
 
 **Definition of done**
 - The UI operates through the API only.
-- Users cannot access servers they do not own or have permission to manage.
+- Users cannot access servers they do not own or have permission to manage (proven by an ownership matrix over every route and operation).
 - Core states and errors are handled clearly.
+- Passwords and sessions meet the rules above, with tests for expiry, revocation, CSRF, throttling and enumeration resistance.
+- Text is translatable and the API exposes error codes.
+
+Out of scope: open sign-up, e-mail verification and password recovery, second factor, public exposure with HTTPS (documented, done at deployment), customers creating servers (Phase 5) and billing (Phase 7).
+
 
 ### Phase 5 — Automated provisioning on a development node
 
@@ -216,9 +240,10 @@ Goal: progressively add the controls required for a real hosting business.
 
 ## Immediate Next Step
 
-1. Decide what comes next. The roadmap order is Phase 4 (web panel and authentication), which is also what makes ownership enforceable: it introduces credentials, sessions and the first public-facing surface, so it needs an explicit plan and security decisions before any code (how users sign up and log in, whether to use an existing identity provider, how the panel and the API are served, and what happens to the shared operator token). Propose the plan first and wait for approval.
-2. Alternatively, settle the two postponed decisions first: the dependency strategy (full freeze versus direct dependencies plus a lock file) and pinning the Minecraft image and version before production.
-3. Carried-over technical debt, all documented in `docs/ARCHITECTURE.md`: no edit or delete operations for users, plans or servers; `GET /servers` needs Docker for live statuses; the `game-hosting.server-id` container label arrives with Phase 5 provisioning; the operator CLI is a bootstrap to be replaced by Phases 4, 5 and 7.
+1. Phase 4A.1 — account data and passwords (see the Phase 4 plan): migration `0002`, `Role`, the password hasher and policy, the `UserAccounts` service and the operator `users` commands.
+2. Then 4A.2 to 4A.5 (sessions, authorization with an `Actor`, the `/api` rework, security review), and a stop for the user's review before the panel (4B).
+3. Pending decisions carried over from earlier phases: the dependency strategy and pinning the Minecraft image and version before production.
+4. Carried-over technical debt, all documented in `docs/ARCHITECTURE.md`: no edit or delete operations for users, plans or servers; `GET /servers` needs Docker for live statuses (reworked in 4A.3); the `game-hosting.server-id` container label arrives with Phase 5 provisioning; the operator CLI is a bootstrap to be replaced by Phases 4, 5 and 7.
 
 
 ## Out of Scope for Now
